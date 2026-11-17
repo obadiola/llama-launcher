@@ -1,0 +1,43 @@
+# Binarios y ejecutables compilados
+# (Permite que el nombre del binario principal o cualquier .exe/.out sea ignorado)
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Directorio de dependencias de Go (Go Modules)
+# En Go moderno, las dependencias se descargan al caché del sistema, 
+# pero a veces se usa vendor/ para incluir dependencias locales.
+# Descomenta la siguiente línea si usas 'go mod vendor':
+# vendor/
+
+# Archivos de cobertura de pruebas y perfiles
+*.prof
+*.coverprofile
+coverage.out
+
+# Directorios de caché de Go
+.go/
+/pkg/
+
+# Archivos de entorno y configuración local
+.env
+.env.local
+*.local
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
+
+# IDEs y editores de código (VS Code, GoLand, Vim, etc.)
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.viminfo
+config.json

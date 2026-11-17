@@ -19,14 +19,16 @@ servidor con los flags de cada perfil.
 Windows (PowerShell):
 
 ```powershell
-go build -o llama-launcher.exe .
+go build -o llama-launcher.exe ./cmd/llama-launcher
 .\llama-launcher.exe
 ```
+
+(o directamente `go run ./cmd/llama-launcher`)
 
 Linux:
 
 ```bash
-go build -o llama-launcher .
+go build -o llama-launcher ./cmd/llama-launcher
 ./llama-launcher
 ```
 
@@ -222,18 +224,29 @@ Es lo que se crea para un modelo sin JSON compañero (o con JSON inválido):
 
 ## Estructura del proyecto
 
-| Archivo | Contenido |
+```
+llama-launcher/
+├── cmd/llama-launcher/main.go   punto de entrada (menú, lanzamiento de perfiles)
+├── internal/config/config.go    config.json: carga/guardado, escaneo, JSON compañero, getters
+├── internal/runner/runner.go    perfil → argumentos de llama-server y ejecución
+├── internal/ui/ui.go            nombre/versión, cabecera, lectura de línea y pausas
+├── internal/ui/term_windows.go  limpieza de pantalla en Windows
+├── internal/ui/term_unix.go     limpieza de pantalla en Linux/macOS
+├── go.mod
+├── config.json                  configuración (se genera al primer arranque)
+├── CEREBRO.md                   memoria de diseño del proyecto
+└── .vscode/                     tarea `build` y depuración F5
+```
+
+| Paquete | Contenido |
 |---|---|
-| `main.go` | `main`, `menuLoop`, `runProfile`, `enabledProfiles`, `printMenu`, `readLine`, `pause` |
-| `config.go` | `Config`/`Profile`, carga y guardado de `config.json`, escaneo, JSON compañero, getters |
-| `runner.go` | traducción del perfil a argumentos (`buildArgs`) y ejecución (`runServer`) |
-| `ui.go` | nombre/versión, cabecera y detección de consola |
-| `term_windows.go` / `term_unix.go` | limpieza de pantalla por plataforma |
-| `config.json` | configuración (se genera al primer arranque) |
-| `.vscode/` | tarea `build` y depuración F5 |
+| `main` (`cmd/llama-launcher`) | `main`, `menuLoop`, `runProfile`, `printMenu` |
+| `config` (`internal/config`) | `Config`/`Profile`, `Load`, `Save`, `Update`, `ModelsDirAbs`, `String`/`Bool`/`Float`, `Enabled` |
+| `runner` (`internal/runner`) | traducción del perfil a argumentos (`BuildArgs`) y ejecución (`RunServer`) |
+| `ui` (`internal/ui`) | `AppName`/`AppVersion`, `PrintHeader`, `ClearScreen`, `ReadLine`, `Pause` |
 
 
-La versión que muestra la cabecera (`llama-launcher v1.0.0`) se define en `ui.go`
+La versión que muestra la cabecera (`llama-launcher v1.0.0`) se define en `internal/ui/ui.go`
 (`AppName` y `AppVersion`).
 
 ## Limitaciones

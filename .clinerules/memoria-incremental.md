@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Protocolo de Memoria Externa (`CEREBRO.md`)
 
-Operas con una ventana de contexto finita. Para garantizar continuidad absoluta entre reinicios, fallos de caché o cambios de sesión, debes mantener un "cerebro externo" en el archivo `CEREBRO.md` en la raíz del proyecto.
+Operas con una ventana de contexto finita. Para garantizar continuidad absoluta entre reinicios, fallos de caché o cambios de sesión, debes mantener un "cerebro externo" en el archivo `CEREBRO.md` en la carpeta docs.
 
 ## Regla de Oro: Pensar en disco, no en memoria volátil
 Antes de escribir o modificar cualquier archivo de código fuente, cada vez que concibas una función, estructura de datos, contrato de API o decisión técnica, **debes registrarla primero en `CEREBRO.md`**.

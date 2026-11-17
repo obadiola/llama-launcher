@@ -23,16 +23,18 @@
 - [x] FIX: `formatJSONValue` no soportaba int/bool → warnings + flags omitidos al lanzar (perfiles en memoria de `defaultProfile` guardan `int`/`bool`). Extender a todos los tipos JSON escalares. (runner.go: float32 + int..uint64 + bool→"1"/"0"; smoke: perfil creado por [U] + lanzamiento → comando con `-c 8192 -fa 1 -ngl 99 --port 8080 -t 8`, sin warnings, exit 0)
 - [x] Quitar cursor de teclas del menú (pedido usuario 2026-11-17: `↑`/`↓` no funcionan en su terminal y ENTER lanzaba desde la posición del cursor). Revertir a por-línea: número → lanza directo, `u/U`, `0`, ENTER/vacío → repintar; eliminar `readKey`/`sel`. (main.go: `menuLoop` por `readLine`, `printMenu(entries)` sin cursor, `readKey` eliminado; smoke: `u`→añade, ENTER vacío NO lanza, `1`→lanza con flags completos, `0`→exit 0)
 - [x] FIX: bool `true` se emitía como `--jinja 1`; llama.cpp exige flag SIN valor (`--jinja`). Cambiar en `buildArgs`: bool true → solo la clave. (runner.go: `case bool` en buildArgs → solo `flagPrefix(k)+k`; smoke: perfil con jinja:true+fa:true → `-fa --jinja` sin valores, exit 0)
-- [x] **BUILD ROTO (fix 2026-11-17):** `config.go` quedó corrupto al pegar `updateConfig`/`profileFromCompanionJSON` dentro de otra función (en el commit `pre gemma`): `return &cfgfgfgfg`, dos `updateConfig`, dos `profileFromCompanionJSON` y código muerto tras un `return nil, false` → `go build` fallaba en `config.go:228`. Reconstruido: `return &cfg`; UNA `profileFromCompanionJSON` (`([]Profile, bool)`, admite array u objeto) + UNA `updateConfig` (append de todos los perfiles). gofmt/vet/build exit 0; smoke: JSON array → 2 perfiles con `file` sobrescrito, JSON objeto → 1 perfil, modelo sin JSON → defaults, `mmproj-*` excluido, lanzamiento OK (`-c 4096 -fa on --jinja --port 8081`), arranque sin config → `profiles: []`.
 - [x] Build + prueba de flujo: arranque, `[U]` (escaneo + JSON compañero) y lanzamiento con servidor fake (exit 0).
 - [x] FIX menú `port: 0`: perfiles con `"port": "8080"` (string) no se mostraban; `profileFloat` ahora parsea strings numéricos (`strconv` añadido a config.go). Smoke: los 10 perfiles reales muestran `port: 8080`.
 - [x] FIX BOM UTF-8: `config.json` guardado con BOM (Notepad/`Out-File`) fallaba el parseo, y un `0` pipeado con BOM daba "Opción no válida". `loadConfig` recorta `utf8BOM` antes de unmarshal; `readLine` recorta `\uFEFF` de la línea. Smoke: config con BOM carga el perfil; stdin con BOM → "Adiós." exit 0.
 - [x] Menú con pantalla limpia + cabecera (pedido usuario 2026-11-17): `menuLoop` hace `clearScreen()` + `printHeader()` en cada repintado; cabecera `llama-launcher v1.0.0` + línea `=`. `ui.go` (`AppName`/`AppVersion`/`isTerminal`/`printHeader`), `term_windows.go` (ANSI VT vía `SetConsoleMode` con `syscall.NewLazyDLL` + fallback `cmd /c cls`), `term_unix.go` (ANSI). Sin escapes si stdout no es consola (pipes/tests limpios). Smoke: pipe → cabecera sin ANSI; consola → limpia y menú arriba.
 - [x] FIX UX derivado de la limpieza: "Opción no válida." se borraba en el repintado inmediato → ahora `pause("Pulsa ENTER para continuar...")` antes de volver al menú.
 - [x] Rellenar `readme.md` con el funcionamiento completo (uso, menú, config.json, traducción de flags, JSON compañero, escaneo, detalles Windows, estructura y limitaciones). Validado: los 4 ejemplos JSON parsean; el comando de ejemplo coincide con la salida real (`-m ... --alias ... -c 81920 -fa on --jinja --port 8080`).
+- [x] REORG (2026-11-18, pedido usuario): estructura Go estándar. `cmd/llama-launcher/main.go` (package main) + `internal/config` (config.json) + `internal/runner` (flags/ejecución) + `internal/ui` (cabecera, consola, limpieza de pantalla). Exportar solo la API usada entre paquetes; eliminar los .go de la raíz; actualizar `.vscode/tasks.json` (build `./cmd/llama-launcher`), `.vscode/launch.json` (program `cmd/llama-launcher`) y README (estructura y comandos). Validación: gofmt limpio, `go vet ./...` exit 0, `go build -o llama-launcher.exe ./cmd/llama-launcher` exit 0; smoke en dir temporal: S1 arranque sin config → `profiles: []` + `0` exit 0; S2 `u` → escaneo con JSON compañero (`custom-alpha` port 9999/c 4096, `beta` defaults, `mmproj-*` excluido); S3 lanzamiento con server fake → `-m ... --alias custom-alpha -c 4096 --port 9999`, vuelta al menú y exit 0.
 
 
 ## 2. Arquitectura y Contratos (Firmas aprobadas)
+
+> Nota (2026-11-18): las secciones siguientes describen los archivos de la v1 (todos en la raíz). Tras la REORG el layout vigente es *Estructura de paquetes (v2)*, al final de esta sección, con las firmas definitivas.
 
 ### go.mod
 - `module llama-launcher` · `go 1.24` · sin require (solo stdlib).
@@ -98,6 +100,56 @@
 - `.vscode/tasks.json` — tarea shell `build`: `go build -o llama-launcher.exe .` (group: build, reveal silent, problemMatcher `$goCompile`).
 - `.vscode/launch.json` — config `"(debug) llama-launcher"`: type go, request launch, mode executable, program `${workspaceFolder}/llama-launcher.exe`, cwd workspaceFolder, console integratedTerminal (stdin del menú va por esa terminal), preLaunchTask build.
 
+### Estructura de paquetes (v2, 2026-11-18)
+
+Layout estándar de un programa Go (binario en `cmd/`, lógica no reutilizable en `internal/`):
+
+```
+cmd/llama-launcher/main.go      package main
+internal/config/config.go       package config
+internal/runner/runner.go       package runner
+internal/ui/ui.go               package ui
+internal/ui/term_windows.go     package ui (//go:build windows)
+internal/ui/term_unix.go        package ui (//go:build !windows)
+go.mod · config.json · README.md · CEREBRO.md · .vscode/
+```
+
+Import paths con el module actual: `llama-launcher/internal/config`, `llama-launcher/internal/runner`, `llama-launcher/internal/ui`.
+
+### internal/config — API exportada
+- `const FileName = "config.json"` — NOMBRE del archivo (sustituye a `ConfigFile` de main).
+- `type Profile = map[string]any` — perfil de esquema abierto (alias del map, sin cambio semántico).
+- `type Config struct { ModelsDir, ServerBin string; Profiles []Profile }` — raíz de config.json v2.
+- `func Default() *Config` — defaults sin escaneo: `models`, `llama-server`, `profiles` vacío (usado por main al no existir config.json).
+- `func Dir() string` — directorio del ejecutable (`os.Executable`), `"."` si falla.
+- `func Path() string` — `filepath.Join(Dir(), FileName)`; única forma de resolver la ruta del config.
+- `func Load(path string) (*Config, error)` — nil,nil si no existe; tolera BOM y sanea backslashes persistiendo la corrección.
+- `func Save(path string, cfg *Config) error` — MarshalIndent 2 espacios + `\n`.
+- `func ModelsDirAbs(modelsDir string) string` — absoluto tal cual; relativo → `filepath.Join(Dir(), modelsDir)`.
+- `func Update(path string, cfg *Config) error` — escaneo + JSON compañero + save (único escaneo).
+- `func String(p Profile, key string) (string, bool)` / `func Bool(p Profile, key string) bool` / `func Float(p Profile, key string) float64` — getters tolerantes (string numérico incluido).
+- `func Enabled(entries []Profile) []Profile` — filtra `disabled: true` conservando orden (antes `enabledProfiles` en main).
+- Internas: `sanitizeJSONBackslashes`, `scanModels`, `defaultProfile`, `companionJSONPath`, `profileFromCompanionJSON`, `utf8BOM`.
+
+### internal/runner — API exportada
+- `func BuildArgs(p config.Profile, cfg *config.Config) ([]string, error)` — binario + `-m` + `--alias` + flags ordenados (bool true sin valor, false omitido).
+- `func RunServer(args []string) (exitCode int, interrupted bool, err error)` — primer plano, Ctrl+C reenviado al hijo.
+- Internas: `shortFlags`, `flagPrefix`, `resolveServerBin` (usa `config.Dir()`), `formatJSONValue`.
+
+### internal/ui — API exportada
+- `const AppName = "llama-launcher"` · `const AppVersion = "1.0.0"`.
+- `func PrintHeader()` — cabecera nombre/versión + separador + línea en blanco.
+- `func ClearScreen()` — por plataforma (`term_windows.go` ANSI VT/`cmd /c cls`, `term_unix.go` ANSI); no-op si stdout no es consola.
+- `func ReadLine() (string, bool)` — lector único `bufio.Reader` (absorbe `\r\n` y BOM UTF-8); ok=false en EOF.
+- `func Pause(prompt string)` — imprime prompt y espera ENTER.
+- Interna: `isTerminal(*os.File) bool`.
+
+### cmd/llama-launcher/main.go
+- `func main()` — `path := config.Path()`; `config.Load` (error → exit 1); nil → `config.Default()` + `config.Save`; `menuLoop(path, cfg)`.
+- `func menuLoop(path string, cfg *config.Config)` — limpia + cabecera + `printMenu(config.Enabled(cfg.Profiles))` + `ui.ReadLine`; número → `runProfile(cfg, enabled[n-1])`; `u/U` → `config.Update`; `0` → salir; vacío → repintar.
+- `func runProfile(cfg *config.Config, p config.Profile)` — ya NO recibe `path` (no lo usaba): stat del `.gguf`, `runner.BuildArgs`, comando `$ ...`, `runner.RunServer`, pausa si fallo real.
+- `func printMenu(entries []config.Profile)` — recibe la lista YA filtrada (no vuelve a filtrar).
+
 ## 3. Banco de Ideas / Funciones Pendientes de Implementar
 
 - `func checkDuplicatePort(entries []Profile) []string` — advertir puertos duplicados en el menú (sin bloquear).
@@ -132,3 +184,4 @@
 - Entradas inválidas (`alias`/`file` ausentes o no string): omitidas del menú con warning; conservadas sin cambios al guardar (esquema abierto).
 - Rutas de trabajo: `modelsDir` y `serverBin` son CAMPOS de config.json (defaults `"models"` / `"llama-server"`); la ruta del config.json SIEMPRE esta junto al ejecutable (`configPath()` = `filepath.Dir(os.Executable())`). Los valores reales del usuario (C:/AI/llama.cpp) van en su propio config.json, nunca en el codigo.
 - Targets: Windows (consola) y Linux; Go ≥ 1.24; sin CGO, sin dependencias.
+- Layout (2026-11-18): `cmd/llama-launcher` (package main: menú y lanzamiento) + `internal/{config,runner,ui}`; imports `llama-launcher/internal/...` con el module actual (sin dominio: válido para builds locales, `go vet/build` OK). `config.json` sigue junto al ejecutable → al compilar en la raíz queda en la raíz. Único estado global: `ui.stdinReader`. README y `.vscode` apuntan a `./cmd/llama-launcher`.

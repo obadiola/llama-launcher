@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package ui
 
 import (
 	"fmt"
@@ -17,9 +17,9 @@ var (
 	procSetConsoleMode = kernel32.NewProc("SetConsoleMode")
 )
 
-// clearScreen — limpia la consola Windows: ANSI (VT) si el modo se pudo activar; si no, fallback `cmd /c cls`.
+// ClearScreen — limpia la consola Windows: ANSI (VT) si el modo se pudo activar; si no, fallback `cmd /c cls`.
 // No hace nada si stdout es un pipe/redirección (tests y scripts conservan la salida limpia).
-func clearScreen() {
+func ClearScreen() {
 	if !isTerminal(os.Stdout) {
 		return
 	}

@@ -1,4 +1,6 @@
-package main
+// Package config gestiona config.json: perfiles de modelos, rutas de trabajo y
+// escaneo de modelos .gguf. Sin dependencias externas (solo stdlib).
+package config
 
 import (
 	"bytes"
@@ -11,6 +13,9 @@ import (
 	"strings"
 )
 
+// FileName — nombre del config.json; la ruta SIEMPRE se resuelve junto al ejecutable (Path()).
+const FileName = "config.json"
+
 // Profile — perfil de modelo (esquema abierto: cualquier clave extra se conserva).
 type Profile = map[string]any
 
@@ -21,17 +26,22 @@ type Config struct {
 	Profiles  []Profile `json:"profiles"`
 }
 
-// configDir — directorio del ejecutable (os.Executable); si falla → ".".
-func configDir() string {
+// Default — configuración inicial (SIN escaneo): modelsDir "models", serverBin "llama-server" y profiles vacío.
+func Default() *Config {
+	return &Config{ModelsDir: "models", ServerBin: "llama-server", Profiles: make([]Profile, 0)}
+}
+
+// Dir — directorio del ejecutable (os.Executable); si falla → ".".
+func Dir() string {
 	if exe, err := os.Executable(); err == nil {
 		return filepath.Dir(exe)
 	}
 	return "."
 }
 
-// configPath — ruta del config.json: SIEMPRE junto al ejecutable.
-func configPath() string {
-	return filepath.Join(configDir(), ConfigFile)
+// Path — ruta del config.json: SIEMPRE junto al ejecutable.
+func Path() string {
+	return filepath.Join(Dir(), FileName)
 }
 
 // sanitizeJSONBackslashes — convierte \X dentro de strings (X no escape JSON válido) en \\X
@@ -92,9 +102,9 @@ func sanitizeJSONBackslashes(data []byte) []byte {
 // utf8BOM — marca de orden de bytes UTF-8 (Notepad/PowerShell antiguo la añaden al guardar).
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
-// loadConfig — si no existe → nil, nil; parsea objeto a *Config (sanitizando backslashes si el unmarshal falla);
+// Load — si no existe → nil, nil; parsea objeto a *Config (sanitizando backslashes si el unmarshal falla);
 // aplica defaults si ModelsDir/ServerBin vacíos.
-func loadConfig(path string) (*Config, error) {
+func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -124,8 +134,8 @@ func loadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// saveConfig — json.MarshalIndent (2 espacios) + salto de línea final.
-func saveConfig(path string, cfg *Config) error {
+// Save — json.MarshalIndent (2 espacios) + salto de línea final.
+func Save(path string, cfg *Config) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("serializar config: %w", err)
@@ -237,24 +247,24 @@ func profileFromCompanionJSON(modelsDirAbs, modelFile string) ([]Profile, bool) 
 	return profiles, true
 }
 
-// modelsDirAbs — absoluto → tal cual; relativo → filepath.Join(configDir(), modelsDir).
-func modelsDirAbs(modelsDir string) string {
+// ModelsDirAbs — absoluto → tal cual; relativo → filepath.Join(Dir(), modelsDir).
+func ModelsDirAbs(modelsDir string) string {
 	if filepath.IsAbs(modelsDir) {
 		return modelsDir
 	}
-	return filepath.Join(configDir(), modelsDir)
+	return filepath.Join(Dir(), modelsDir)
 }
 
-// updateConfig — escanea modelsDirAbs(cfg.ModelsDir); añade solo .gguf no referenciados (un perfil por alias si
+// Update — escanea ModelsDirAbs(cfg.ModelsDir); añade solo .gguf no referenciados (un perfil por alias si
 // hay JSON compañero en array; uno por modelo si es objeto); guarda.
-func updateConfig(path string, cfg *Config) error {
-	models, err := scanModels(modelsDirAbs(cfg.ModelsDir))
+func Update(path string, cfg *Config) error {
+	models, err := scanModels(ModelsDirAbs(cfg.ModelsDir))
 	if err != nil {
 		return err
 	}
 	referenced := make(map[string]bool, len(cfg.Profiles))
 	for _, p := range cfg.Profiles {
-		if f, ok := profileString(p, "file"); ok {
+		if f, ok := String(p, "file"); ok {
 			referenced[f] = true
 		}
 	}
@@ -262,32 +272,32 @@ func updateConfig(path string, cfg *Config) error {
 		if referenced[m] {
 			continue
 		}
-		if profiles, ok := profileFromCompanionJSON(modelsDirAbs(cfg.ModelsDir), m); ok {
+		if profiles, ok := profileFromCompanionJSON(ModelsDirAbs(cfg.ModelsDir), m); ok {
 			cfg.Profiles = append(cfg.Profiles, profiles...) // uno o varios perfiles según el JSON compañero
 			continue
 		}
-		if companionJSONPath(modelsDirAbs(cfg.ModelsDir), m) != "" {
+		if companionJSONPath(ModelsDirAbs(cfg.ModelsDir), m) != "" {
 			fmt.Fprintf(os.Stderr, "warning: JSON compañero de %q inválido; usando parámetros por defecto\n", m)
 		}
 		cfg.Profiles = append(cfg.Profiles, defaultProfile(m))
 	}
-	return saveConfig(path, cfg)
+	return Save(path, cfg)
 }
 
-// profileString — getter seguro a string.
-func profileString(p Profile, key string) (string, bool) {
+// String — getter seguro a string.
+func String(p Profile, key string) (string, bool) {
 	v, ok := p[key].(string)
 	return v, ok
 }
 
-// profileBool — false si ausente/no bool.
-func profileBool(p Profile, key string) bool {
+// Bool — false si ausente/no bool.
+func Bool(p Profile, key string) bool {
 	v, _ := p[key].(bool)
 	return v
 }
 
-// profileFloat — getter a float64 (para mostrar port); acepta float64/int/int64/float32 y string numérico.
-func profileFloat(p Profile, key string) float64 {
+// Float — getter a float64 (para mostrar port); acepta float64/int/int64/float32 y string numérico.
+func Float(p Profile, key string) float64 {
 	switch v := p[key].(type) {
 	case float64:
 		return v
@@ -305,4 +315,16 @@ func profileFloat(p Profile, key string) float64 {
 	default:
 		return 0
 	}
+}
+
+// Enabled — copia de las entradas con disabled != true, en orden original.
+func Enabled(entries []Profile) []Profile {
+	out := make([]Profile, 0, len(entries))
+	for _, p := range entries {
+		if Bool(p, "disabled") {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }

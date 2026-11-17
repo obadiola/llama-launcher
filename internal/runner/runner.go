@@ -1,4 +1,6 @@
-package main
+// Package runner traduce los perfiles de config.json a argumentos de llama-server
+// y ejecuta el servidor en primer plano.
+package runner
 
 import (
 	"context"
@@ -15,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"llama-launcher/internal/config"
 )
 
 // shortFlags — flags con prefijo corto; 1 letra también "-"; 2+ letras "--".
@@ -31,11 +35,11 @@ func flagPrefix(key string) string {
 	return "--"
 }
 
-// resolveServerBin — resuelve bin (absoluto tal cual; relativo → configDir()); exec.LookPath;
+// resolveServerBin — resuelve bin (absoluto tal cual; relativo → config.Dir()); exec.LookPath;
 // fallback llama-server.exe (Windows).
 func resolveServerBin(bin string) (string, error) {
 	if !filepath.IsAbs(bin) {
-		bin = filepath.Join(configDir(), bin)
+		bin = filepath.Join(config.Dir(), bin)
 	}
 	if p, err := exec.LookPath(bin); err == nil {
 		return p, nil
@@ -95,14 +99,14 @@ func formatJSONValue(v any) (string, bool) {
 	}
 }
 
-// buildArgs — [bin, -m, <modelo>, --alias, <alias>] + claves restantes ordenadas alfabéticamente;
-// resuelve modelsDirAbs(cfg.ModelsDir) y resolveServerBin(cfg.ServerBin).
-func buildArgs(p Profile, cfg *Config) ([]string, error) {
-	file, okFile := profileString(p, "file")
+// BuildArgs — [bin, -m, <modelo>, --alias, <alias>] + claves restantes ordenadas alfabéticamente;
+// resuelve config.ModelsDirAbs(cfg.ModelsDir) y resolveServerBin(cfg.ServerBin).
+func BuildArgs(p config.Profile, cfg *config.Config) ([]string, error) {
+	file, okFile := config.String(p, "file")
 	if !okFile || file == "" {
 		return nil, fmt.Errorf("perfil: campo \"file\" ausente o no es string")
 	}
-	alias, okAlias := profileString(p, "alias")
+	alias, okAlias := config.String(p, "alias")
 	if !okAlias || alias == "" {
 		return nil, fmt.Errorf("perfil: campo \"alias\" ausente o no es string")
 	}
@@ -111,7 +115,7 @@ func buildArgs(p Profile, cfg *Config) ([]string, error) {
 		return nil, err
 	}
 
-	args := []string{bin, "-m", filepath.Join(modelsDirAbs(cfg.ModelsDir), file), "--alias", alias}
+	args := []string{bin, "-m", filepath.Join(config.ModelsDirAbs(cfg.ModelsDir), file), "--alias", alias}
 
 	keys := make([]string, 0, len(p))
 	for k := range p {
@@ -154,8 +158,8 @@ func buildArgs(p Profile, cfg *Config) ([]string, error) {
 	return args, nil
 }
 
-// runServer — ejecuta el servidor de forma bloqueante; devuelve exitCode, interrupted (señal) y err.
-func runServer(args []string) (exitCode int, interrupted bool, err error) {
+// RunServer — ejecuta el servidor de forma bloqueante; devuelve exitCode, interrupted (señal) y err.
+func RunServer(args []string) (exitCode int, interrupted bool, err error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

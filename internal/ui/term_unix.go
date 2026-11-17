@@ -1,15 +1,15 @@
 //go:build !windows
 
-package main
+package ui
 
 import (
 	"fmt"
 	"os"
 )
 
-// clearScreen — limpia la pantalla con secuencia ANSI (ESC[2J ESC[H).
+// ClearScreen — limpia la pantalla con secuencia ANSI (ESC[2J ESC[H).
 // No hace nada si stdout es un pipe/redirección.
-func clearScreen() {
+func ClearScreen() {
 	if !isTerminal(os.Stdout) {
 		return
 	}

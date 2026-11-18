@@ -33,14 +33,15 @@ func main() {
 }
 
 // menuLoop — bucle por LÍNEAS: limpia pantalla + cabecera (nombre/versión) + menú; número → lanza directamente;
-// u/U → config.Update (único escaneo); 0 → salir; vacío/ENTER → repintar (NO lanza); otra entrada → "Opción no
-// válida." + ENTER (la pantalla se limpia en el siguiente repintado).
+// u/U → config.Update (único escaneo); r/R → refreshConfig (relee config.json sin escanear); 0 → salir;
+// vacío/ENTER → repintar (NO lanza); otra entrada → "Opción no válida." + ENTER (se limpia al repintar).
 func menuLoop(path string, cfg *config.Config) {
 	for {
 		ui.ClearScreen()
 		ui.PrintHeader()
 		enabled := config.Enabled(cfg.Profiles)
 		printMenu(enabled)
+		fmt.Print("Introduce un código: ") // prompt de la opción (se borra al repintar)
 		line, ok := ui.ReadLine()
 		if !ok {
 			return // EOF: salir
@@ -56,6 +57,11 @@ func menuLoop(path string, cfg *config.Config) {
 				fmt.Fprintln(os.Stderr, "error al actualizar la configuración:", uErr)
 				ui.Pause("Pulsa ENTER para continuar...")
 			}
+		case line == "r", line == "R":
+			if rErr := refreshConfig(path, cfg); rErr != nil {
+				fmt.Println("No se pudo refrescar la configuración:", rErr)
+				ui.Pause("Pulsa ENTER para continuar...")
+			}
 		default:
 			nOpt, errAtoi := strconv.Atoi(line)
 			if errAtoi != nil || nOpt <= 0 || nOpt > len(enabled) {
@@ -66,6 +72,21 @@ func menuLoop(path string, cfg *config.Config) {
 			runProfile(cfg, enabled[nOpt-1])
 		}
 	}
+}
+
+// refreshConfig — relee config.json desde disco (SIN escaneo) y sustituye el contenido en memoria: sirve para
+// aplicar cambios hechos con la app en marcha. Si el archivo no existe o es inválido devuelve error y la
+// configuración actual queda intacta.
+func refreshConfig(path string, cfg *config.Config) error {
+	reloaded, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	if reloaded == nil {
+		return fmt.Errorf("%s no existe", config.FileName)
+	}
+	*cfg = *reloaded
+	return nil
 }
 
 // runProfile — lanza un perfil: stat del modelo (ausente → error + pause sin lanzar) → BuildArgs → mostrar comando →
@@ -99,8 +120,9 @@ func runProfile(cfg *config.Config, p config.Profile) {
 	}
 }
 
-// printMenu — lista numerada de los perfiles recibidos (YA filtrados): `N) alias — file (port: X)`;
-// pies [U]/[0]; nota si no hay habilitados.
+// printMenu — lista numerada de los perfiles recibidos (YA filtrados): `N) alias — file (host:puerto)`;
+// el fichero va en cian y host:puerto en amarillo (sin colores si la consola no admite ANSI);
+// pies [U]/[R]/[0]; nota si no hay habilitados.
 func printMenu(entries []config.Profile) {
 	if len(entries) == 0 {
 		fmt.Println("No hay perfiles habilitados. Usa [U] para escanear modelos.")
@@ -111,9 +133,17 @@ func printMenu(entries []config.Profile) {
 			if alias == "" {
 				alias = file
 			}
-			fmt.Printf("%d) %s — %s (port: %d)\n", i+1, alias, file, int(config.Float(p, "port")))
+			host, _ := config.String(p, "host")
+			if host == "" {
+				host = "127.0.0.1" // host por defecto de llama-server
+			}
+			endpoint := fmt.Sprintf("%s:%d", host, int(config.Float(p, "port")))
+			fmt.Printf("%d) %s — %s (%s)\n", i+1, alias,
+				ui.Color(file, ui.ColorCyan),
+				ui.Color(endpoint, ui.ColorYellow))
 		}
 	}
-	fmt.Println("[U] Actualizar config")
+	fmt.Println("[U] Buscar nuevos modelos y actualizar config")
+	fmt.Println("[R] Refrescar memoria con datos de config")
 	fmt.Println("[0] Salir")
 }

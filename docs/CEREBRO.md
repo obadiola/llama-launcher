@@ -30,6 +30,15 @@
 - [x] FIX UX derivado de la limpieza: "Opción no válida." se borraba en el repintado inmediato → ahora `pause("Pulsa ENTER para continuar...")` antes de volver al menú.
 - [x] Rellenar `readme.md` con el funcionamiento completo (uso, menú, config.json, traducción de flags, JSON compañero, escaneo, detalles Windows, estructura y limitaciones). Validado: los 4 ejemplos JSON parsean; el comando de ejemplo coincide con la salida real (`-m ... --alias ... -c 81920 -fa on --jinja --port 8080`).
 - [x] REORG (2026-11-18, pedido usuario): estructura Go estándar. `cmd/llama-launcher/main.go` (package main) + `internal/config` (config.json) + `internal/runner` (flags/ejecución) + `internal/ui` (cabecera, consola, limpieza de pantalla). Exportar solo la API usada entre paquetes; eliminar los .go de la raíz; actualizar `.vscode/tasks.json` (build `./cmd/llama-launcher`), `.vscode/launch.json` (program `cmd/llama-launcher`) y README (estructura y comandos). Validación: gofmt limpio, `go vet ./...` exit 0, `go build -o llama-launcher.exe ./cmd/llama-launcher` exit 0; smoke en dir temporal: S1 arranque sin config → `profiles: []` + `0` exit 0; S2 `u` → escaneo con JSON compañero (`custom-alpha` port 9999/c 4096, `beta` defaults, `mmproj-*` excluido); S3 lanzamiento con server fake → `-m ... --alias custom-alpha -c 4096 --port 9999`, vuelta al menú y exit 0.
+- [x] NUEVO `[R] Refrescar config` (pedido usuario 2026-11-18): `config.Load(path)` de nuevo (SIN escaneo) y sustituye el contenido en memoria (`*cfg = *reloaded`); error o archivo ausente → aviso + ENTER conservando la config actual. (main.go: `refreshConfig(path, cfg)`; smoke S4: perfil deshabilitado en disco + `r` → menú pasa de 2 a 1 perfiles; S6: JSON inválido → mensaje + pause + exit 0)
+- [x] NUEVO `defaults` en config.json (v3, pedido usuario): `Config.Defaults Profile` con tag `json:"defaults"`; `builtinDefaults()` = `host/port/c/ngl/t/fa` + `api-key` = UUID v4 (`newUUID`, crypto/rand); `ensureDefaults(cfg) bool` crea el objeto y completa claves que falten → `Load` guarda si hubo cambios; `defaultProfile(modelFile, defaults)` = copia de defaults + alias/file/disabled:false. (smoke S1: config nueva → `DEFAULT_KEYS=api-key,c,fa,host,ngl,port,t` + UUID4 OK; S2: perfil nuevo hereda defaults y el UUID no se regenera)
+- [x] NUEVO `[U]` marca `disabled:true` en perfiles cuyo `file` ya NO está en el escaneo (`markMissing`; comparación `filepath.ToSlash` + minúsculas); solo activa, nunca reactiva (respeta deshabilitados manuales); `Update` guarda. También `referenced` usa la misma normalización (evita duplicados `sub/x` vs `sub\x`). (smoke S3/S5: modelo borrado → `disabled=True` y ausente del menú; el resto intacto)
+- [x] NUEVO menú: fichero del modelo en cian (`ui.ColorCyan`) y `(host:puerto)` en amarillo (`ui.ColorYellow`, host por defecto `127.0.0.1`); `ui.Color(s, code)` + `colorEnabled()` por plataforma (Windows: VT una sola vez con `sync.Once`; sin consola/VT → sin escapes). Pie con `[U]`, `[R]`, `[0]`. (smoke S4: `(127.0.0.1:8080)` en el menú, 0 escapes ANSI con stdout pipeado)
+- [x] NUEVO prompt antes de leer la opción (pedido usuario 2026-11-18): `menuLoop` imprime `Introduce un código: ` (sin salto de línea) justo antes de `ui.ReadLine`; se borra con el repintado (ClearScreen) tras cualquier acción. (main.go: `fmt.Print("Introduce un código: ")`; smoke: prompt tras `[0] Salir` antes de leer la línea, UTF-8 correcto)
+- [x] NUEVO pie del menú (pedido usuario 2026-11-18): `[R] Refrescar memoria con datos de config` (antes `[R] Refrescar config`); comportamiento sin cambios. (main.go ya lo tenía editado a mano por el usuario; smoke: etiqueta exacta en la salida + `[U]`/prompt intactos; README + CEREBRO sincronizados)
+
+
+
 
 
 ## 2. Arquitectura y Contratos (Firmas aprobadas)
@@ -131,30 +140,43 @@ Import paths con el module actual: `llama-launcher/internal/config`, `llama-laun
 - `func Enabled(entries []Profile) []Profile` — filtra `disabled: true` conservando orden (antes `enabledProfiles` en main).
 - Internas: `sanitizeJSONBackslashes`, `scanModels`, `defaultProfile`, `companionJSONPath`, `profileFromCompanionJSON`, `utf8BOM`.
 
+### internal/config — v3 ampliación (2026-11-18, diseño)
+- `type Config struct { ModelsDir, ServerBin string; Defaults Profile; Profiles []Profile }` — `defaults` se serializa ANTES de `profiles` (orden de campos del struct).
+- `func Default() *Config` — añade `Defaults: builtinDefaults()`.
+- `func newUUID() string` — UUID v4 (`crypto/rand` + version/variant); fallback al reloj si `rand` falla.
+- `func builtinDefaults() Profile` — `host:"127.0.0.1"`, `port:8080`, `c:8192`, `ngl:99`, `t:8`, `fa:"on"`, `api-key:<UUID v4>` (flag `--api-key`).
+- `func ensureDefaults(cfg *Config) bool` — crea `Defaults` si nil y añade cada clave ausente de `builtinDefaults()`; true = hubo cambios (guardar).
+- `func defaultProfile(modelFile string, defaults Profile) Profile` — copia de `defaults` + `alias` (base sin `.gguf`) + `file` + `disabled:false`.
+- `func markMissing(cfg *Config, models []string) bool` — `disabled:true` en perfiles con `file` no presente en el escaneo (no toca los ya `true`); true = hubo cambios.
+- `func normalizeModelPath(rel string) string` — clave de comparación `strings.ToLower(filepath.ToSlash(rel))`.
+- `func Update(path string, cfg *Config) error` — escaneo → `ensureDefaults` (red de seguridad) → `markMissing` → altas (compañero/`defaultProfile(m, cfg.Defaults)`) → `Save`.
+- `func Load(path string) (*Config, error)` — además: `ensureDefaults` y, si devuelve true, `Save` (warning por stderr si no se pudo guardar).
+
 ### internal/runner — API exportada
 - `func BuildArgs(p config.Profile, cfg *config.Config) ([]string, error)` — binario + `-m` + `--alias` + flags ordenados (bool true sin valor, false omitido).
 - `func RunServer(args []string) (exitCode int, interrupted bool, err error)` — primer plano, Ctrl+C reenviado al hijo.
 - Internas: `shortFlags`, `flagPrefix`, `resolveServerBin` (usa `config.Dir()`), `formatJSONValue`.
 
 ### internal/ui — API exportada
-- `const AppName = "llama-launcher"` · `const AppVersion = "1.0.0"`.
+- `const AppName = "llama-launcher"` · `const AppVersion = "1.1.1"`.
+- `const ColorCyan = "36"` (fichero del modelo) · `const ColorYellow = "33"` (`host:puerto`) — códigos ANSI para `Color`.
+- `func Color(s, code string) string` — `\x1b[<code>m` + s + `\x1b[0m` SOLO si `colorEnabled()`; en pipes/tests o consolas sin VT devuelve s intacto.
 - `func PrintHeader()` — cabecera nombre/versión + separador + línea en blanco.
 - `func ClearScreen()` — por plataforma (`term_windows.go` ANSI VT/`cmd /c cls`, `term_unix.go` ANSI); no-op si stdout no es consola.
 - `func ReadLine() (string, bool)` — lector único `bufio.Reader` (absorbe `\r\n` y BOM UTF-8); ok=false en EOF.
 - `func Pause(prompt string)` — imprime prompt y espera ENTER.
-- Interna: `isTerminal(*os.File) bool`.
+- Internas por plataforma: `isTerminal(*os.File) bool` (ui.go), `colorEnabled() bool`, y en Windows `enableVT() bool` + `vtOnce sync.Once`/`vtOK` (SetConsoleMode idempotente).
 
 ### cmd/llama-launcher/main.go
 - `func main()` — `path := config.Path()`; `config.Load` (error → exit 1); nil → `config.Default()` + `config.Save`; `menuLoop(path, cfg)`.
-- `func menuLoop(path string, cfg *config.Config)` — limpia + cabecera + `printMenu(config.Enabled(cfg.Profiles))` + `ui.ReadLine`; número → `runProfile(cfg, enabled[n-1])`; `u/U` → `config.Update`; `0` → salir; vacío → repintar.
+- `func menuLoop(path string, cfg *config.Config)` — limpia + cabecera + `printMenu(config.Enabled(cfg.Profiles))` + `fmt.Print("Introduce un código: ")` + `ui.ReadLine`; número → `runProfile(cfg, enabled[n-1])`; `u/U` → `config.Update`; `r/R` → `refreshConfig` (error → mensaje + `ui.Pause`); `0` → salir; vacío → repintar.
+- `func refreshConfig(path string, cfg *config.Config) error` — `config.Load` y `*cfg = *reloaded`; error si es inválido o no existe (`config.json no existe`), dejando intacta la config en memoria.
 - `func runProfile(cfg *config.Config, p config.Profile)` — ya NO recibe `path` (no lo usaba): stat del `.gguf`, `runner.BuildArgs`, comando `$ ...`, `runner.RunServer`, pausa si fallo real.
-- `func printMenu(entries []config.Profile)` — recibe la lista YA filtrada (no vuelve a filtrar).
+- `func printMenu(entries []config.Profile)` — recibe la lista YA filtrada: `N) alias — <file en cian> (<host:puerto> en amarillo)`, host por defecto `127.0.0.1`; pies `[U] Buscar nuevos modelos y actualizar config` / `[R] Refrescar memoria con datos de config` / `[0] Salir`.
 
 ## 3. Banco de Ideas / Funciones Pendientes de Implementar
 
 - `func checkDuplicatePort(entries []Profile) []string` — advertir puertos duplicados en el menú (sin bloquear).
-- `func detectMissingModels(entries []Profile) map[string]bool` — marcar en el menú los `file` que ya no existen en disco (renombre/OneDrive); sin tocar el JSON.
-- Opción `[R] Recargar config` del menú (solo lectura desde disco, sin escaneo).
 - Log a `llama-launcher.log` (`os.Create` + timestamps) — opcional.
 - `cmd.Env` con `CHCP 65001` si se detecta conflicto cp1252 ↔ UTF-8 en la consola.
 - Ampliar `shortFlags` si llama.cpp expone más flags cortos.
@@ -185,3 +207,11 @@ Import paths con el module actual: `llama-launcher/internal/config`, `llama-laun
 - Rutas de trabajo: `modelsDir` y `serverBin` son CAMPOS de config.json (defaults `"models"` / `"llama-server"`); la ruta del config.json SIEMPRE esta junto al ejecutable (`configPath()` = `filepath.Dir(os.Executable())`). Los valores reales del usuario (C:/AI/llama.cpp) van en su propio config.json, nunca en el codigo.
 - Targets: Windows (consola) y Linux; Go ≥ 1.24; sin CGO, sin dependencias.
 - Layout (2026-11-18): `cmd/llama-launcher` (package main: menú y lanzamiento) + `internal/{config,runner,ui}`; imports `llama-launcher/internal/...` con el module actual (sin dominio: válido para builds locales, `go vet/build` OK). `config.json` sigue junto al ejecutable → al compilar en la raíz queda en la raíz. Único estado global: `ui.stdinReader`. README y `.vscode` apuntan a `./cmd/llama-launcher`.
+- config.json v3 (2026-11-18): raíz `{modelsDir, serverBin, defaults, profiles}`. `defaults` (`Profile`) es la PLANTILLA de los modelos NUEVOS; se serializa antes de `profiles` (orden de campos del struct). `Load` ejecuta `ensureDefaults` y solo reescribe el archivo si faltaba el bloque o alguna clave (idempotente una vez completo) → un `defaults` ya existente NUNCA se toca ni se regenera.
+- `defaults.api-key` = UUID v4 generado con `crypto/rand` (16 bytes + version 4 + variante RFC 4122; fallback al reloj si `rand` falla). Se envía como `--api-key <uuid>` y los modelos nuevos lo HEREDAN (mismo valor) hasta que el usuario lo cambie a mano.
+- `markMissing` (solo en `[U]`, tras el escaneo): `disabled:true` a los perfiles cuyo `file` no aparece; **nunca** reactiva (`disabled` manual se respeta) ni borra. Comparación `strings.ToLower(filepath.ToSlash(rel))` (tolera `/` vs `\` y caja). `referenced` usa la misma normalización → no se duplican perfiles por diferencias de separador.
+- Consecuencia aceptada: `[U]` con un `modelsDir` equivocado/vacío deshabilita todos los perfiles no encontrados (recuperable a mano); documentado en README.
+- `[R]` = solo relee `config.json` (SIN escaneo, SIN escribir): `*cfg = *reloaded`; si es inválido o no existe → mensaje + ENTER y se conserva la config en memoria. Para altas/ocultar modelos ausentes hay que usar `[U]`.
+- Colores: `ui.Color(s, code)` emite `\x1b[<code>m…\x1b[0m` SOLO si `colorEnabled()` (Windows: stdout consola + VT activado una vez con `sync.Once`; Unix: stdout consola). En pipes/tests/consolas sin VT, texto plano sin escapes (la limpieza de pantalla usa el mismo predicado y cae a `cmd /c cls`). Fichero del modelo en cian (`36`), `(host:puerto)` en amarillo (`33`); `host` ausente → `127.0.0.1` (default de llama.cpp).
+- `AppVersion` 1.1.1 (features `[R]`, `defaults`, ocultar ausentes, colores; bump manual del usuario).
+- Prompt del menú: `fmt.Print("Introduce un código: ")` se imprime sin salto de línea justo después del pie y antes de `ui.ReadLine` (la opción se teclea en esa misma línea). Si `stdout` es consola y no hay repintado inmediato, el texto queda visible; tras cualquier acción el `ClearScreen` lo borra junto con el menú.

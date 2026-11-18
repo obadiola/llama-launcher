@@ -15,3 +15,8 @@ func ClearScreen() {
 	}
 	fmt.Print("\x1b[2J\x1b[H")
 }
+
+// colorEnabled — escapes ANSI solo si stdout es una consola (pipes/redirecciones quedan limpias).
+func colorEnabled() bool {
+	return isTerminal(os.Stdout)
+}

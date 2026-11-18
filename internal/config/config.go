@@ -4,6 +4,7 @@ package config
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // FileName — nombre del config.json; la ruta SIEMPRE se resuelve junto al ejecutable (Path()).
@@ -19,16 +21,64 @@ const FileName = "config.json"
 // Profile — perfil de modelo (esquema abierto: cualquier clave extra se conserva).
 type Profile = map[string]any
 
-// Config — raíz de config.json v2: {"modelsDir","serverBin","profiles"}.
+// Config — raíz de config.json v3: {"modelsDir","serverBin","defaults","profiles"}.
+// Defaults son los valores que hereda cada modelo NUEVO (los añade Update/escaneo).
 type Config struct {
 	ModelsDir string    `json:"modelsDir"`
 	ServerBin string    `json:"serverBin"`
+	Defaults  Profile   `json:"defaults"`
 	Profiles  []Profile `json:"profiles"`
 }
 
-// Default — configuración inicial (SIN escaneo): modelsDir "models", serverBin "llama-server" y profiles vacío.
+// Default — configuración inicial (SIN escaneo): modelsDir "models", serverBin "llama-server",
+// defaults de fábrica y profiles vacío.
 func Default() *Config {
-	return &Config{ModelsDir: "models", ServerBin: "llama-server", Profiles: make([]Profile, 0)}
+	return &Config{ModelsDir: "models", ServerBin: "llama-server", Defaults: builtinDefaults(), Profiles: make([]Profile, 0)}
+}
+
+// builtinDefaults — valores de fábrica de un modelo NUEVO (config.json → "defaults").
+// api-key es la clave del flag --api-key de llama-server: un UUID v4 distinto por configuración.
+func builtinDefaults() Profile {
+	return Profile{
+		"host":    "127.0.0.1",
+		"port":    8080,
+		"c":       8192,
+		"ngl":     99,
+		"t":       8,
+		"fa":      "on",
+		"api-key": newUUID(),
+	}
+}
+
+// newUUID — UUID v4 (8-4-4-4-12) a partir de crypto/rand; si rand falla, se deriva del reloj.
+func newUUID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		t := uint64(time.Now().UnixNano())
+		for i := 0; i < 8; i++ {
+			b[i] = byte(t >> (8 * (7 - i)))
+		}
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // versión 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variante RFC 4122
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// ensureDefaults — crea cfg.Defaults si es nil y añade cada clave ausente de builtinDefaults()
+// (incluida api-key, que se genera con un UUID nuevo); true = hubo cambios (el llamador debe guardar).
+func ensureDefaults(cfg *Config) bool {
+	changed := false
+	if cfg.Defaults == nil {
+		cfg.Defaults = make(Profile, 8)
+		changed = true
+	}
+	for k, v := range builtinDefaults() {
+		if _, ok := cfg.Defaults[k]; !ok {
+			cfg.Defaults[k] = v
+			changed = true
+		}
+	}
+	return changed
 }
 
 // Dir — directorio del ejecutable (os.Executable); si falla → ".".
@@ -131,6 +181,12 @@ func Load(path string) (*Config, error) {
 	if cfg.ServerBin == "" {
 		cfg.ServerBin = "llama-server"
 	}
+	// Crear/completar "defaults" en disco si faltaba (config.json autoexplicativo).
+	if ensureDefaults(&cfg) {
+		if sErr := Save(path, &cfg); sErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: no se pudo guardar %s con los defaults: %v\n", path, sErr)
+		}
+	}
 	return &cfg, nil
 }
 
@@ -172,24 +228,50 @@ func scanModels(dir string) ([]string, error) {
 	return models, nil
 }
 
-// defaultProfile — alias/file/disabled/host/port/c/ngl/t/fa para un modelo nuevo.
-func defaultProfile(modelFile string) Profile {
+// defaultProfile — perfil de un modelo NUEVO: copia de defaults (host/port/c/ngl/t/fa/api-key y cualquier
+// clave extra del usuario) + alias (nombre base sin .gguf), file y disabled:false.
+func defaultProfile(modelFile string, defaults Profile) Profile {
 	base := filepath.Base(modelFile)
 	alias := base
 	if i := strings.LastIndex(alias, "."); i > 0 && strings.EqualFold(alias[i:], ".gguf") {
 		alias = alias[:i]
 	}
-	return Profile{
-		"alias":    alias,
-		"file":     modelFile,
-		"disabled": false,
-		"host":     "127.0.0.1",
-		"port":     8080,
-		"c":        8192,
-		"ngl":      99,
-		"t":        8,
-		"fa":       "on",
+	p := make(Profile, len(defaults)+3)
+	for k, v := range defaults {
+		p[k] = v
 	}
+	p["alias"] = alias
+	p["file"] = modelFile
+	p["disabled"] = false
+	return p
+}
+
+// normalizeModelPath — clave de comparación de rutas relativas de modelo: separador "/" y minúsculas
+// (Windows: FS y rutas de config.json insensibles a caja/separador; en Linux se acepta la tolerancia).
+func normalizeModelPath(rel string) string {
+	return strings.ToLower(filepath.ToSlash(rel))
+}
+
+// markMissing — pone disabled:true en los perfiles cuyo "file" NO aparece en el escaneo (modelo borrado o
+// renombrado); no toca los ya deshabilitados (un disabled manual se respeta) ni reactiva ninguno.
+// true = hubo cambios.
+func markMissing(cfg *Config, models []string) bool {
+	present := make(map[string]bool, len(models))
+	for _, m := range models {
+		present[normalizeModelPath(m)] = true
+	}
+	changed := false
+	for _, p := range cfg.Profiles {
+		file, ok := String(p, "file")
+		if !ok || file == "" || present[normalizeModelPath(file)] {
+			continue
+		}
+		if !Bool(p, "disabled") {
+			p["disabled"] = true
+			changed = true
+		}
+	}
+	return changed
 }
 
 // companionJSONPath — resuelve la ruta del JSON compañero de un modelo (exacto o case-insensitive en el mismo dir); "" si no existe.
@@ -255,21 +337,24 @@ func ModelsDirAbs(modelsDir string) string {
 	return filepath.Join(Dir(), modelsDir)
 }
 
-// Update — escanea ModelsDirAbs(cfg.ModelsDir); añade solo .gguf no referenciados (un perfil por alias si
-// hay JSON compañero en array; uno por modelo si es objeto); guarda.
+// Update — escanea ModelsDirAbs(cfg.ModelsDir); marca disabled:true los perfiles cuyo modelo ya no existe;
+// añade solo .gguf no referenciados (un perfil por alias si hay JSON compañero en array; uno por modelo si es
+// objeto; si no hay compañero → defaults de cfg.Defaults); guarda.
 func Update(path string, cfg *Config) error {
 	models, err := scanModels(ModelsDirAbs(cfg.ModelsDir))
 	if err != nil {
 		return err
 	}
+	ensureDefaults(cfg)      // red de seguridad: Update puede recibir un Config construido a mano
+	markMissing(cfg, models) // modelos borrados/renombrados → ocultos del menú (disabled:true)
 	referenced := make(map[string]bool, len(cfg.Profiles))
 	for _, p := range cfg.Profiles {
-		if f, ok := String(p, "file"); ok {
-			referenced[f] = true
+		if f, ok := String(p, "file"); ok && f != "" {
+			referenced[normalizeModelPath(f)] = true // tolera "/" vs "\" y caja distinta
 		}
 	}
 	for _, m := range models { // models ya está ordenado alfabéticamente
-		if referenced[m] {
+		if referenced[normalizeModelPath(m)] {
 			continue
 		}
 		if profiles, ok := profileFromCompanionJSON(ModelsDirAbs(cfg.ModelsDir), m); ok {
@@ -279,7 +364,7 @@ func Update(path string, cfg *Config) error {
 		if companionJSONPath(ModelsDirAbs(cfg.ModelsDir), m) != "" {
 			fmt.Fprintf(os.Stderr, "warning: JSON compañero de %q inválido; usando parámetros por defecto\n", m)
 		}
-		cfg.Profiles = append(cfg.Profiles, defaultProfile(m))
+		cfg.Profiles = append(cfg.Profiles, defaultProfile(m, cfg.Defaults))
 	}
 	return Save(path, cfg)
 }

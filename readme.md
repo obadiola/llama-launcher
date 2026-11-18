@@ -41,11 +41,13 @@ En VS Code hay una tarea `build` y una configuración de depuración `(debug) ll
 ## Cómo funciona
 
 1. **Arranque**: busca `config.json` junto al ejecutable.
-   - Si **no existe**, lo crea con valores por defecto (`modelsDir: "models"`, `serverBin: "llama-server"`)
-     y `profiles: []`. **No escanea modelos al arrancar.**
-   - Si existe, lo carga (tolerando `\` sin escapar y BOM UTF-8).
+   - Si **no existe**, lo crea con valores por defecto (`modelsDir: "models"`, `serverBin: "llama-server"`,
+     el bloque `defaults` y `profiles: []`). **No escanea modelos al arrancar.**
+   - Si existe, lo carga (tolerando `\` sin escapar y BOM UTF-8) y **completa `defaults`** con las claves
+     que falten (por ejemplo `api-key` con un UUID nuevo), guardándolo.
 2. **Bucle del menú**: en cada vuelta limpia la pantalla, imprime la cabecera
-   (`llama-launcher v1.0.0`) y la lista de perfiles habilitados, y espera una línea.
+   (`llama-launcher v1.1.1`) y la lista de perfiles habilitados, muestra `Introduce un código: `
+   y espera una línea.
 3. **Al elegir un perfil**: comprueba que el `.gguf` exista, construye los argumentos,
    muestra el comando (`$ ...`) y ejecuta `llama-server` **en primer plano** (su salida va
    directo a la consola). Al terminar vuelve al menú.
@@ -56,26 +58,34 @@ En VS Code hay una tarea `build` y una configuración de depuración `(debug) ll
 ## El menú
 
 ```
-llama-launcher v1.0.0
+llama-launcher v1.1.1
 =====================
 
-1) gemma-4-E2B-it-q8 — gemma/gemma-4-E2B-it-Q8_0.gguf (port: 8080)
-2) qwen3.8-27b — Qwen3.8-27B-UD-IQ2_XS.gguf (port: 8080)
-[U] Actualizar config · [0] Salir · número para lanzar
+1) gemma-4-E2B-it-q8 — gemma/gemma-4-E2B-it-Q8_0.gguf (127.0.0.1:8080)
+2) qwen3.8-27b — Qwen3.8-27B-UD-IQ2_XS.gguf (127.0.0.1:8080)
+[U] Buscar nuevos modelos y actualizar config
+[R] Refrescar memoria con datos de config
+[0] Salir
+Introduce un código:
 ```
 
 | Entrada | Acción |
 |---|---|
 | `1`, `2`, … (también multi-dígito) | Lanza ese perfil directamente |
-| `u` / `U` | Escanea `modelsDir` y añade perfiles nuevos a `config.json` |
+| `u` / `U` | **Buscar nuevos modelos y actualizar config**: escanea `modelsDir`, añade perfiles nuevos a `config.json` y oculta los modelos ausentes |
+| `r` / `R` | Relee `config.json` desde disco **sin escanear** (aplica cambios hechos con la app abierta) |
 | `0` | Sale del programa |
 | ENTER / línea vacía | Repinta el menú (no lanza nada) |
 | Cualquier otra cosa | `Opción no válida.` + ENTER para volver al menú |
 
 - Solo se numeran los perfiles **habilitados** (`disabled` distinto de `true`); el número se refiere a esa lista.
-- Cada perfil se muestra como `alias — file (port: X)`.
+- El pie del menú indica las acciones (`[U]` escanear, `[R]` refrescar, `[0]` salir) y, justo después,
+  se muestra el prompt `Introduce un código: ` en la misma línea donde se escribe la opción.
+- Cada perfil se muestra como `alias — file (host:puerto)`: el **fichero va en cian** y el
+  **`host:puerto` en amarillo**. Si el perfil no tiene `host` se muestra `127.0.0.1` (el host por defecto de llama.cpp).
+- Los colores y la limpieza de pantalla solo se emiten si `stdout` es una consola que acepta secuencias ANSI
+  (en pipes, scripts y tests la salida queda limpia; en consolas Windows sin VT se usan sin color).
 - Si no hay perfiles habilitados: `No hay perfiles habilitados. Usa [U] para escanear modelos.`
-- La pantalla se limpia en cada repintado (solo si `stdout` es una consola; en pipes/scripts no se emiten secuencias ANSI).
 
 ## config.json
 
@@ -85,6 +95,15 @@ Es la única configuración de la app y vive junto al ejecutable.
 {
   "modelsDir": "C:/AI/llama.cpp/models",
   "serverBin": "C:/AI/llama.cpp/motor/llama-server.exe",
+  "defaults": {
+    "api-key": "43938026-dceb-4e0d-948d-e332a8a72892",
+    "c": 8192,
+    "fa": "on",
+    "host": "127.0.0.1",
+    "ngl": 99,
+    "port": 8080,
+    "t": 8
+  },
   "profiles": []
 }
 ```
@@ -93,7 +112,22 @@ Es la única configuración de la app y vive junto al ejecutable.
 |---|---|---|---|
 | `modelsDir` | string | `"models"` | Carpeta de modelos. Si es relativa, se resuelve respecto al ejecutable. |
 | `serverBin` | string | `"llama-server"` | Ejecutable de llama.cpp: ruta absoluta, relativa al ejecutable o nombre en el `PATH`. En Windows, fallback automático a `llama-server.exe`. |
+| `defaults` | objeto | ver abajo | Valores que hereda cada modelo **nuevo** al escanear. |
 | `profiles` | array | `[]` | Lista de perfiles (objetos de esquema abierto). |
+
+### `defaults` — valores de los modelos nuevos
+
+`defaults` es una **plantilla**: cuando `[U]` añade un modelo sin JSON compañero, el perfil se crea copiando
+`defaults` y añadiendo `alias`, `file` y `disabled: false`.
+
+- Se puede editar a mano: cualquier clave (`c`, `port`, `temp`, `jinja`, `n-gpu-layers`…) se traduce a flags
+  igual que en un perfil.
+- Si falta el bloque o alguna de sus claves, la app lo **crea/completa y guarda** `config.json` con
+  `host`, `port`, `c`, `ngl`, `t`, `fa` y `api-key`.
+- `api-key` se rellena con un **UUID v4** generado con `crypto/rand`; se envía como `--api-key <uuid>`.
+  Se genera una sola vez y queda guardado, así que todos los modelos nuevos heredan ese mismo valor
+  (cámbialo a mano si quieres otro por modelo).
+- Los perfiles ya existentes **no** se tocan: `defaults` solo afecta a los modelos añadidos después.
 
 ### Perfiles
 
@@ -104,7 +138,8 @@ Cada perfil es un objeto JSON. La app reconoce estas claves:
 | `alias` | Nombre mostrado en el menú y enviado como `--alias`. |
 | `file` | Ruta del `.gguf` **relativa a `modelsDir`**. Se envía como `-m <modelsDir>/<file>`. |
 | `disabled` | `true` → el perfil se oculta del menú (no se borra del JSON). |
-| `port` | Se usa para mostrar `(port: X)` en el menú; además se envía como `--port`. Acepta número o string. |
+| `host` | Se usa para mostrar `(host:puerto)` en el menú (por defecto `127.0.0.1`); además se envía como `--host`. |
+| `port` | Se usa para mostrar `(host:puerto)` en el menú; además se envía como `--port`. Acepta número o string. |
 | cualquier otra | Se traduce a un flag de `llama-server` (ver abajo). |
 
 ### Traducción de un perfil a argumentos
@@ -158,13 +193,25 @@ $ C:/AI/llama.cpp/motor/llama-server.exe -m C:/AI/llama.cpp/models/gemma-4-E4B-i
 1. Recorre `modelsDir` **recursivamente**.
 2. Considera archivos `.gguf` (extensión insensible a mayúsculas).
 3. Ignora los `mmproj-*.gguf`: son el parámetro `--mmproj` de un modelo, no modelos IA.
-4. Añade solo los modelos cuyo `file` no esté ya en ningún perfil (incluidos los `disabled`).
-5. Para cada modelo nuevo busca un **JSON compañero** (ver abajo):
+4. **Marca `disabled: true`** en los perfiles cuyo `file` ya no está en el escaneo (modelo borrado o renombrado):
+   desaparecen del menú pero **siguen en el JSON**. Nunca reactiva un perfil deshabilitado a mano.
+5. Añade solo los modelos cuyo `file` no esté ya en ningún perfil (incluidos los `disabled`). La comparación
+   tolera `/` frente a `\` y diferencias de mayúsculas.
+6. Para cada modelo nuevo busca un **JSON compañero** (ver abajo):
    - válido → crea perfiles con sus parámetros;
-   - ausente → perfil por defecto, en silencio;
-   - inválido → warning por `stderr` + perfil por defecto.
-6. Guarda `config.json` (indentación de 2 espacios; las claves de los mapas se escriben en orden alfabético).
-   **Nunca modifica ni borra perfiles existentes.**
+   - ausente → perfil con los valores de `defaults`, en silencio;
+   - inválido → warning por `stderr` + perfil con los valores de `defaults`.
+7. Guarda `config.json` (indentación de 2 espacios; las claves de los mapas se escriben en orden alfabético).
+   **Nunca borra perfiles.**
+
+### Refrescar memoria con datos de config (`[R]`)
+
+`r`/`R` vuelve a leer `config.json` **desde disco y sin escanear** modelos, y sustituye la configuración en memoria:
+
+- Útil si editas a mano `alias`, `port`, `disabled`, `defaults`… con la app ya abierta.
+- Si el fichero es inválido o ha desaparecido, muestra el error, **conserva** la configuración anterior y espera ENTER.
+- Al repintar el menú se aplican los cambios (los `disabled` ya no aparecen).
+- No añade modelos nuevos ni modifica el JSON: para eso está `[U]`.
 
 ### JSON compañero de un modelo
 
@@ -192,9 +239,10 @@ Reglas:
 - El resto de claves es libre; se traducen a flags igual que en `config.json`.
 - Solo se usa cuando ese `.gguf` todavía no está referenciado en `profiles`.
 
-### Perfil por defecto
+### Perfil nuevo (hereda `defaults`)
 
-Es lo que se crea para un modelo sin JSON compañero (o con JSON inválido):
+Es lo que se crea para un modelo sin JSON compañero (o con JSON inválido): copia de `defaults` + `alias`,
+`file` y `disabled: false`:
 
 ```json
 {
@@ -206,7 +254,8 @@ Es lo que se crea para un modelo sin JSON compañero (o con JSON inválido):
   "c": 8192,
   "ngl": 99,
   "t": 8,
-  "fa": "on"
+  "fa": "on",
+  "api-key": "<UUID v4 de defaults>"
 }
 ```
 
@@ -221,17 +270,20 @@ Es lo que se crea para un modelo sin JSON compañero (o con JSON inválido):
   Sin servidor en marcha, cierra la app (comportamiento estándar de consola).
 - **Salida del servidor**: se hereda directamente a la consola, en tiempo real.
   Ojo: al volver al menú la pantalla se limpia, así que el log del servidor ya no se ve.
+- **Colores**: el menú usa secuencias ANSI (fichero en cian, `host:puerto` en amarillo). En Windows se activa
+  `ENABLE_VIRTUAL_TERMINAL_PROCESSING` una sola vez (`sync.Once`); si la consola no lo soporta o `stdout` no es
+  consola, el texto sale **sin color y sin escapes**.
 
 ## Estructura del proyecto
 
 ```
 llama-launcher/
-├── cmd/llama-launcher/main.go   punto de entrada (menú, lanzamiento de perfiles)
-├── internal/config/config.go    config.json: carga/guardado, escaneo, JSON compañero, getters
+├── cmd/llama-launcher/main.go   punto de entrada (menú, refresco, lanzamiento de perfiles)
+├── internal/config/config.go    config.json: carga/guardado, defaults, escaneo, JSON compañero, getters
 ├── internal/runner/runner.go    perfil → argumentos de llama-server y ejecución
-├── internal/ui/ui.go            nombre/versión, cabecera, lectura de línea y pausas
-├── internal/ui/term_windows.go  limpieza de pantalla en Windows
-├── internal/ui/term_unix.go     limpieza de pantalla en Linux/macOS
+├── internal/ui/ui.go            nombre/versión, cabecera, colores, lectura de línea y pausas
+├── internal/ui/term_windows.go  limpieza de pantalla y VT/colores en Windows
+├── internal/ui/term_unix.go     limpieza de pantalla y colores en Linux/macOS
 ├── go.mod
 ├── config.json                  configuración (se genera al primer arranque)
 ├── CEREBRO.md                   memoria de diseño del proyecto
@@ -240,13 +292,13 @@ llama-launcher/
 
 | Paquete | Contenido |
 |---|---|
-| `main` (`cmd/llama-launcher`) | `main`, `menuLoop`, `runProfile`, `printMenu` |
-| `config` (`internal/config`) | `Config`/`Profile`, `Load`, `Save`, `Update`, `ModelsDirAbs`, `String`/`Bool`/`Float`, `Enabled` |
+| `main` (`cmd/llama-launcher`) | `main`, `menuLoop`, `refreshConfig`, `runProfile`, `printMenu` |
+| `config` (`internal/config`) | `Config`/`Profile`, `Load`, `Save`, `Update`, `ModelsDirAbs`, `String`/`Bool`/`Float`, `Enabled` (`defaults`/`markMissing` internos) |
 | `runner` (`internal/runner`) | traducción del perfil a argumentos (`BuildArgs`) y ejecución (`RunServer`) |
-| `ui` (`internal/ui`) | `AppName`/`AppVersion`, `PrintHeader`, `ClearScreen`, `ReadLine`, `Pause` |
+| `ui` (`internal/ui`) | `AppName`/`AppVersion`, `PrintHeader`, `Color`, `ClearScreen`, `ReadLine`, `Pause` |
 
 
-La versión que muestra la cabecera (`llama-launcher v1.0.0`) se define en `internal/ui/ui.go`
+La versión que muestra la cabecera (`llama-launcher v1.1.1`) se define en `internal/ui/ui.go`
 (`AppName` y `AppVersion`).
 
 ## Limitaciones
@@ -257,7 +309,10 @@ La versión que muestra la cabecera (`llama-launcher v1.0.0`) se define en `inte
 - Los mapas anidados dentro de un perfil se ignoran con un warning.
 - Al volver al menú se borra el log del servidor (la pantalla se limpia).
 - Al guardar, las claves de los mapas se ordenan alfabéticamente (no se conserva el orden original).
-- No hay tests automatizados; la validación es manual (menú, `[U]` y lanzamiento con un `llama-server` real o simulado).
+- `[U]` con un `modelsDir` equivocado (o vacío) marca `disabled: true` **todos** los perfiles cuyos modelos no
+  encuentre: revisa `modelsDir` antes de escanear (no se borra nada; se pueden reactivar a mano).
+- `defaults.api-key` se comparte: todos los modelos nuevos heredan el mismo UUID hasta que lo cambies.
+- No hay tests automatizados; la validación es manual (menú, `[U]`, `[R]` y lanzamiento con un `llama-server` real o simulado).
 
 ## Problemas típicos
 
@@ -267,6 +322,7 @@ La versión que muestra la cabecera (`llama-launcher v1.0.0`) se define en `inte
 | `No se encontró ...gguf` | `file` no coincide con el modelo en `modelsDir`. Pulsa `[U]` y revisa `modelsDir`. |
 | `no se encontró "..." en PATH` | `serverBin` mal escrito o `llama-server` no está en el `PATH`. Usa ruta absoluta. |
 | `Opción no válida.` | Entrada no numérica o número fuera del rango de perfiles habilitados. |
-| El menú muestra `port: 0` | El perfil no tiene `port` o no es numérico. |
-| Un modelo no aparece en el menú | Está `disabled`, su `file` ya existe en otro perfil, o es un `mmproj-*` (no se lista). |
+| El menú muestra `host:puerto` con `:0` | El perfil no tiene `port` o no es numérico. |
+| `No se pudo refrescar la configuración: ...` | `config.json` inválido o desaparecido al pulsar `[R]`; corrige el JSON y vuelve a pulsar `[R]`. |
+| Un modelo no aparece en el menú | Está `disabled` (a mano o porque `[U]` no encontró su `.gguf`), su `file` ya existe en otro perfil, o es un `mmproj-*` (no se lista). |
 | El modelo arranca y muere al instante | Flags inválidos para tu versión de `llama-server`: lee su error antes de que se repinte el menú. |

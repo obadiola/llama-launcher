@@ -14,7 +14,15 @@ const (
 	// AppName — nombre mostrado en la cabecera.
 	AppName = "llama-launcher"
 	// AppVersion — versión mostrada en la cabecera (SemVer).
-	AppVersion = "1.0.1"
+	AppVersion = "1.1.1"
+)
+
+// Códigos ANSI usados por Color (menú).
+const (
+	// ColorCyan — nombre del fichero del modelo.
+	ColorCyan = "36"
+	// ColorYellow — host:puerto del perfil.
+	ColorYellow = "33"
 )
 
 // stdinReader — lector único global para ReadLine (pausas y menú).
@@ -34,6 +42,15 @@ func PrintHeader() {
 	fmt.Printf("%s v%s\n", AppName, AppVersion)
 	fmt.Println(strings.Repeat("=", len(AppName)+len(AppVersion)+2))
 	fmt.Println()
+}
+
+// Color — envuelve s en el color ANSI code (ColorCyan/ColorYellow) solo si la salida admite escapes
+// (colorEnabled); en pipes/tests o consolas sin VT devuelve s intacto.
+func Color(s, code string) string {
+	if !colorEnabled() {
+		return s
+	}
+	return "\x1b[" + code + "m" + s + "\x1b[0m"
 }
 
 // ReadLine — línea de stdinReader (absorbe \r\n y BOM UTF-8); (text, ok=false) si EOF.

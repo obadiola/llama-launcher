@@ -54,6 +54,9 @@ En VS Code hay una tarea `build` y una configuración de depuración `(debug) ll
 4. **Ctrl+C durante el servidor**: se envía al proceso hijo (CTRL_BREAK en Windows,
    SIGINT/SIGTERM en Linux), el servidor termina y se vuelve al menú **sin pausa**.
    Si el servidor falla (código de salida ≠ 0), se muestra `Pulsa ENTER para continuar...`.
+5. **Modo servidor `[S]`**: genera `<modelsDir>/preset.ini` con los perfiles habilitados y lanza
+   `llama-server --models-preset <preset.ini> --port 8080 --host 0.0.0.0` (router de llama.cpp;
+   ver [Modo servidor](#modo-servidor-pi-s-y-presetini)).
 
 ## El menú
 
@@ -65,6 +68,7 @@ llama-launcher v1.1.1
 2) qwen3.8-27b — Qwen3.8-27B-UD-IQ2_XS.gguf (127.0.0.1:8080)
 [U] Buscar nuevos modelos y actualizar config
 [R] Refrescar memoria con datos de config
+[S] Modo servidor (Pi): genera preset.ini y arranca llama-server
 [0] Salir
 Introduce un código:
 ```
@@ -74,18 +78,89 @@ Introduce un código:
 | `1`, `2`, … (también multi-dígito) | Lanza ese perfil directamente |
 | `u` / `U` | **Buscar nuevos modelos y actualizar config**: escanea `modelsDir`, añade perfiles nuevos a `config.json` y oculta los modelos ausentes |
 | `r` / `R` | Relee `config.json` desde disco **sin escanear** (aplica cambios hechos con la app abierta) |
+| `s` / `S` | **Modo servidor (Pi)**: genera `preset.ini` y arranca `llama-server` en modo router (ver [Modo servidor](#modo-servidor-pi-s-y-presetini)) |
 | `0` | Sale del programa |
 | ENTER / línea vacía | Repinta el menú (no lanza nada) |
 | Cualquier otra cosa | `Opción no válida.` + ENTER para volver al menú |
 
 - Solo se numeran los perfiles **habilitados** (`disabled` distinto de `true`); el número se refiere a esa lista.
-- El pie del menú indica las acciones (`[U]` escanear, `[R]` refrescar, `[0]` salir) y, justo después,
+- El pie del menú indica las acciones (`[U]` escanear, `[R]` refrescar, `[S]` modo servidor, `[0]` salir) y, justo después,
   se muestra el prompt `Introduce un código: ` en la misma línea donde se escribe la opción.
 - Cada perfil se muestra como `alias — file (host:puerto)`: el **fichero va en cian** y el
   **`host:puerto` en amarillo**. Si el perfil no tiene `host` se muestra `127.0.0.1` (el host por defecto de llama.cpp).
 - Los colores y la limpieza de pantalla solo se emiten si `stdout` es una consola que acepta secuencias ANSI
   (en pipes, scripts y tests la salida queda limpia; en consolas Windows sin VT se usan sin color).
 - Si no hay perfiles habilitados: `No hay perfiles habilitados. Usa [U] para escanear modelos.`
+
+## Modo servidor (Pi): `[S]` y `preset.ini`
+
+La opción `[S]` arranca `llama-server` en **modo router**: sirve todos los modelos a la vez y elige
+cuál cargar según el campo `model` de cada petición (pensado para una Raspberry Pi).
+
+1. Genera (o **sustituye**) `<modelsDir>/preset.ini` con los perfiles habilitados de `config.json`.
+2. Ejecuta, con el directorio del ejecutable como directorio de trabajo:
+
+   ```
+   <serverBin> --models-preset <modelsDir>/preset.ini --port 8080 --host 0.0.0.0
+   ```
+
+   `serverBin` y `modelsDir` salen de `config.json`; `--port 8080` y `--host 0.0.0.0` son fijos.
+
+> En la Pi, con `"modelsDir": "models"` y `"serverBin": "motor/llama-server"` (ambos relativos al
+> ejecutable), el comando resultante es exactamente
+> `./motor/llama-server --models-preset ./models/preset.ini --port 8080 --host 0.0.0.0`.
+
+`preset.ini` es el formato INI de presets de llama.cpp: cada modelo es una sección con el alias como
+nombre y las opciones como `clave = valor` (los argumentos de `llama-server` **sin** los guiones iniciales):
+
+```ini
+; generado por llama-launcher [S]; se sustituye en cada arranque
+
+[qwen2.5-coder-14b]
+model = C:/modelos/qwen2.5-coder-14b-instruct-q4_k_m.gguf
+cache-type-k = q8_0
+cache-type-v = q8_0
+ctx-size = 32768
+flash-attn = on
+jinja = true
+n-gpu-layers = 99
+```
+
+Traducción de claves al INI:
+
+| En el perfil | En `preset.ini` |
+|---|---|
+| `alias` | nombre de la sección (`[alias]`; repetido → `alias-2`, `alias-3`…) |
+| `file` | `model` con la ruta **absoluta** del `.gguf` |
+| `mmproj` | `mmproj` con la ruta **absoluta** del fichero (si es relativa se resuelve contra `modelsDir`) |
+| `c` | `ctx-size` |
+| `ngl` / `n-gpu-layers` | `n-gpu-layers` |
+| `fa` / `flash-attn` | `flash-attn` |
+| `t` / `tb` | `threads` / `threads-batch` |
+| `b` / `ub` | `batch-size` / `ubatch-size` |
+| `n` | `n-predict` |
+| `np` | `parallel` |
+| `ctk` / `ctv` | `cache-type-k` / `cache-type-v` |
+| `s` | `seed` |
+| Resto (`temp`, `top-k`, `jinja`, `reasoning-budget`…) | se usa la misma clave |
+
+- `host`, `port`, `api-key` y `alias` **no** se escriben en el preset: los controla el router de
+  llama.cpp y los sobrescribe/elimina al cargar el modelo (por eso van en la línea de comandos).
+- `disabled` tampoco: no es un argumento de `llama.cpp` y haría fallar el archivo entero; los perfiles
+  deshabilitados simplemente no aparecen.
+- `mmproj` se trata como `model`: si el valor es relativo se prefija con `modelsDir` (ruta completa);
+  si ya es absoluto o una URL se deja tal cual. Así llama-server encuentra el proyector sin depender
+  de su directorio de trabajo.
+- Lo mismo se aplica al **lanzamiento directo** (`[n]` del menú): las claves de ruta `mmproj`, `lora`,
+  `control-vector`, `grammar-file`, `chat-template-file` y `model-draft` se resuelven contra
+  `modelsDir` cuando su valor es relativo (los absolutos y las URLs se dejan intactos).
+- `true` → `true`; `false` y claves propias de la app se omiten. Los arrays y mapas anidados no se
+  pueden representar (el INI admite un valor por clave): warning por `stderr` y se omiten.
+- Si un perfil define dos claves que apuntan al mismo nombre INI (por ejemplo `n-gpu-layers` y `ngl`),
+  gana la última en orden alfabético, igual que al lanzar con flags.
+- `[S]` **no escanea** modelos: usa los perfiles que hay en memoria. Si has añadido modelos, pulsa `[U]` antes.
+- Si no hay ningún perfil habilitado, muestra el aviso y no genera el preset.
+- El fichero se reescribe **completo** en cada `[S]` (no se conserva nada editado a mano en él).
 
 ## config.json
 
@@ -152,9 +227,15 @@ El comando se construye **sin shell** (argumentos exactos, los espacios en rutas
 | Clave en el perfil | Flag generado | Valor |
 |---|---|---|
 | 1 carácter (`c`, `t`, `b`…) | `-c`, `-t`, `-b` | `-c 8192` |
-| `ngl`, `fa` | `-ngl`, `-fa` (lista corta) | `-ngl 99`, `-fa on` |
+| Alias corto documentado (`ngl`, `fa`, `ts`, `sm`, `ctk`, `ctv`, `np`, `mm`, `md`, `to`…) | `-ngl`, `-fa`, `-ts`, `-sm`, `-ctk`… | `-ngl 99`, `-fa on`, `-ts 0.5,0.5` |
 | Ya empieza por `-` (`"-ngl"`) | se usa tal cual | `-ngl 99` |
 | Resto (`port`, `temp`, `jinja`…) | `--port`, `--temp`, `--jinja` | `--port 8080` |
+
+La lista de alias cortos (`-cl`, `-tb`, `-ub`, `-kvo`, `-ctk`, `-ctv`, `-ot`, `-sm`, `-ts`, `-mg`,
+`-mm`, `-mmdev`, `-np`, `-cb`, `-to`, `-sps`, `-md`, `-ngld`… incluidos los de borrador `-td`,
+`-tbd`, `-devd`) está en `internal/runner/runner.go` (`shortFlags`), copiada de la ayuda oficial de
+`llama-server`. Los alias distinguen mayúsculas (`Cr`/`Cb`/`Cd`…). Cualquier clave que no esté en esa
+lista se envía en forma larga (`--clave`), que es la forma que recomienda llama.cpp.
 
 Reglas de valor:
 
@@ -280,6 +361,7 @@ Es lo que se crea para un modelo sin JSON compañero (o con JSON inválido): cop
 llama-launcher/
 ├── cmd/llama-launcher/main.go   punto de entrada (menú, refresco, lanzamiento de perfiles)
 ├── internal/config/config.go    config.json: carga/guardado, defaults, escaneo, JSON compañero, getters
+├── internal/preset/preset.go    preset.ini: perfiles → secciones INI del router de llama-server
 ├── internal/runner/runner.go    perfil → argumentos de llama-server y ejecución
 ├── internal/ui/ui.go            nombre/versión, cabecera, colores, lectura de línea y pausas
 ├── internal/ui/term_windows.go  limpieza de pantalla y VT/colores en Windows
@@ -292,9 +374,10 @@ llama-launcher/
 
 | Paquete | Contenido |
 |---|---|
-| `main` (`cmd/llama-launcher`) | `main`, `menuLoop`, `refreshConfig`, `runProfile`, `printMenu` |
+| `main` (`cmd/llama-launcher`) | `main`, `menuLoop`, `refreshConfig`, `runProfile`, `startServerMode`, `runArgs`, `printMenu` |
 | `config` (`internal/config`) | `Config`/`Profile`, `Load`, `Save`, `Update`, `ModelsDirAbs`, `String`/`Bool`/`Float`, `Enabled` (`defaults`/`markMissing` internos) |
-| `runner` (`internal/runner`) | traducción del perfil a argumentos (`BuildArgs`) y ejecución (`RunServer`) |
+| `preset` (`internal/preset`) | `FileName`, `Path`, `Build` y `Save`: perfiles habilitados → secciones `[alias]` con `model` y el resto de opciones |
+| `runner` (`internal/runner`) | traducción del perfil a argumentos (`BuildArgs`), resolución del binario (`ResolveServerBin`) y ejecución (`RunServer`/`RunServerIn`) |
 | `ui` (`internal/ui`) | `AppName`/`AppVersion`, `PrintHeader`, `Color`, `ClearScreen`, `ReadLine`, `Pause` |
 
 
@@ -312,7 +395,10 @@ La versión que muestra la cabecera (`llama-launcher v1.1.1`) se define en `inte
 - `[U]` con un `modelsDir` equivocado (o vacío) marca `disabled: true` **todos** los perfiles cuyos modelos no
   encuentre: revisa `modelsDir` antes de escanear (no se borra nada; se pueden reactivar a mano).
 - `defaults.api-key` se comparte: todos los modelos nuevos heredan el mismo UUID hasta que lo cambies.
-- No hay tests automatizados; la validación es manual (menú, `[U]`, `[R]` y lanzamiento con un `llama-server` real o simulado).
+- `[S]` requiere un `llama-server` con soporte de router (`--models-preset`); en el preset se ignoran
+  `host`/`port`/`api-key` por modelo (los controla el router), y los arrays/mapas anidados se omiten.
+  El `preset.ini` se reescribe completo en cada `[S]`: no edites a mano algo que quieras conservar.
+- No hay tests automatizados; la validación es manual (menú, `[U]`, `[R]`, `[S]` y lanzamiento con un `llama-server` real o simulado).
 
 ## Problemas típicos
 

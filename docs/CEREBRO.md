@@ -36,6 +36,11 @@
 - [x] NUEVO menú: fichero del modelo en cian (`ui.ColorCyan`) y `(host:puerto)` en amarillo (`ui.ColorYellow`, host por defecto `127.0.0.1`); `ui.Color(s, code)` + `colorEnabled()` por plataforma (Windows: VT una sola vez con `sync.Once`; sin consola/VT → sin escapes). Pie con `[U]`, `[R]`, `[0]`. (smoke S4: `(127.0.0.1:8080)` en el menú, 0 escapes ANSI con stdout pipeado)
 - [x] NUEVO prompt antes de leer la opción (pedido usuario 2026-11-18): `menuLoop` imprime `Introduce un código: ` (sin salto de línea) justo antes de `ui.ReadLine`; se borra con el repintado (ClearScreen) tras cualquier acción. (main.go: `fmt.Print("Introduce un código: ")`; smoke: prompt tras `[0] Salir` antes de leer la línea, UTF-8 correcto)
 - [x] NUEVO pie del menú (pedido usuario 2026-11-18): `[R] Refrescar memoria con datos de config` (antes `[R] Refrescar config`); comportamiento sin cambios. (main.go ya lo tenía editado a mano por el usuario; smoke: etiqueta exacta en la salida + `[U]`/prompt intactos; README + CEREBRO sincronizados)
+- [x] NUEVO `[S]` modo servidor router para la Pi (pedido usuario 2026-11-21): genera/sustituye `<modelsDir>/preset.ini` desde los perfiles habilitados y arranca `<serverBin> --models-preset <preset.ini> --port 8080 --host 0.0.0.0` con cwd = `config.Dir()`. Diseño: paquete nuevo `internal/preset` (Build/Save/Path), `runner.ResolveServerBin` exportado y `runner.RunServerIn(dir, args)`; main: `startServerMode` + `runArgs`. (smoke 2026-11-21: gofmt limpio + `go vet ./...` + build exit 0; `config.json` real en dir temporal → 18 secciones, 0 claves prohibidas y 0 duplicadas, `gemma-4-E4B-it` colisión `n-gpu-layers`+`ngl` → 99, `Qwen3.8` `n-gpu-layers = all` conservado; `--models-preset <abs> --port 8080 --host 0.0.0.0` recibidos por server fake; preset previo SUSTITUIDO; sin perfiles → aviso + ENTER y NO crea preset)
+- [x] FIX lanzamiento directo `[n]`: la clave `mmproj` se enviaba a llama-server SIN ruta (nombre relativo al CWD del launcher) → no encontraba el proyector; solo el preset `[S]` la resolvía. Unificar: `config.ResolveModelPath` compartido + resolución de claves de RUTA en `runner.BuildArgs` (string y elementos string de arrays). (2026-11-24: gofmt limpio, `go vet ./...` + `go test ./...` + build exit 0; test `TestResolvePathValue`/`TestBuildArgsResuelveRutas`; smoke con server fake: `--mmproj C:\...\models\mmproj-model.gguf` al lanzar `[1]` y preset `[S]` con la misma ruta; README actualizado)
+- [x] FIX preset.ini (pedido usuario 2026-11-21): la clave `mmproj` debe llevar la RUTA COMPLETA del fichero (relativa a `modelsDir` → absoluta, igual que `model`), no solo el nombre. Diseño: `resolveModelPath(path, modelsDirAbs)` + `options(p, modelsDirAbs)`; absolutos/URLs tal cual (`ToSlash`). (smoke 2026-11-21: gofmt/vet/build exit 0; relativo `mmproj-vision.gguf` → `<modelsDir>/mmproj-vision.gguf`, subcarpeta `vision/mmproj-other.gguf` → `<modelsDir>/vision/...`, absoluto `C:/otro/sitio/...` intacto, `mmproj-url` intacto, clave `--mmproj` normalizada a `mmproj` con ruta completa)
+- [x] `shortFlags` COMPLETO desde la doc oficial (pedido usuario 2026-11-25): añadidos todos los alias con UN solo guion de `tools/server/README.md` de llama.cpp (68 claves de ≥2 letras: `cl`, `tb`, `Cr`, `Cb`, `Crb`, `ub`, `kvo`, `nkvo`, `nr`, `ctk`, `ctv`, `lm`, `lzm`, `dev`, `ot`, `cmoe`, `ncmoe`, `ncffn`, `sm`, `ts`, `mg`, `fit`, `fitt`, `fitc`, `mu`, `dr`, `hf`, `hfr`, `hff`, `hft`, `lv`, `jf`, `bs`, `lcs`, `lcd`, `ctxcp`, `cms`, `cram`, `kvu`, `no-kvu`, `sp`, `np`, `cb`, `nocb`, `mm`, `mmu`, `mmdev`, `ag`, `no-ag`, `to`, `rea`, `sps`, `ctkd`, `ctvd`, `hfd`, `hfrd`, `td`, `tbd`, `Cd`, `Crd`, `Cbd`, `otd`, `cmoed`, `ncmoed`, `devd`, `ngld`, `md`; `ngl`/`fa` ya estaban). Las de 1 letra (`h t c n b e v s m l j r a C`) siguen emitiéndose con `-` por longitud. Test `TestFlagPrefixShortFlags` + `TestBuildArgsUsaAliasCortos`; README con la tabla de traducción actualizada. (gofmt limpio, `go vet ./...` + `go test ./...` + build exit 0; cobertura verificada por script: 68 alias en el README oficial = 68 en el mapa, 0 diferencias; smoke con server falso: `-c 2048 -ctk q8_0 -no-kvu -np 2 --port 8080 -sm row -ts 0.5,0.5`, exit 0)
+
 
 
 
@@ -71,7 +76,7 @@
 - `func profileBool(p Profile, key string) bool` — `false` si ausente/no bool (ausente ≠ deshabilitado).
 - `func profileFloat(p Profile, key string) float64` — getter a float64 (para mostrar `port`); acepta `float64/int/int64/float32` y `string` numérico (`strconv.ParseFloat`; si no parsea → 0). Fix 2026-11-17: perfiles con `"port": "8080"` (string) mostraban `port: 0`.
 ### runner.go (implementado — firmas definitivas)
-- `var shortFlags = map[string]bool{"ngl": true, "fa": true}` — flags cortos (prefijo `-`); 1 letra también `-`; 2+ letras `--`; clave ya con `-` se usa tal cual.
+- `var shortFlags = map[string]bool{...}` — alias CORTO con un solo guion documentado en `tools/server/README.md` de llama.cpp (consulta 2026-11-25): `cl`, `tb`, `Cr`/`Cb`/`Crb`, `ub`, `fa`, `kvo`/`nkvo`/`nr`, `ctk`/`ctv`, `lm`/`lzm`, `dev`, `ot`, `cmoe`/`ncmoe`/`ncffn`, `ngl`, `sm`/`ts`/`mg`, `fit`/`fitt`/`fitc`, `mu`/`dr`/`hf`/`hfr`/`hff`/`hft`, `lv`, `ctkd`/`ctvd`, `jf`, `bs`, `lcs`/`lcd`, `ctxcp`/`cms`/`cram`/`kvu`/`no-kvu`, `sp`, `np`, `cb`/`nocb`, `mm`/`mmu`/`mmdev`, `ag`/`no-ag`, `to`, `rea`, `sps`, `hfd`/`hfrd`, `td`/`tbd`, `Cd`/`Crd`/`Cbd`, `otd`, `cmoed`/`ncmoed`, `devd`, `ngld`, `md` → prefijo `-`; 1 letra también `-`; 2+ letras sin alias `--`; clave ya con `-` se usa tal cual. Los alias son sensibles a mayúsculas (`Cr` ≠ `cr`). Test: `TestFlagPrefixShortFlags`.
 - `func resolveServerBin(bin string) (string, error)` — resuelve `bin` (absoluto tal cual; relativo → `configDir()`); `exec.LookPath`; fallback Windows `llama-server.exe`.
 - `func flagPrefix(key string) string` — prefijo de flag según longitud de clave / lista `shortFlags`.
 - `func formatJSONValue(v any) (string, bool)` — string → literal; float64 entero exacto → decimal (`FormatInt`); otro float64/float32 → `FormatFloat`; int/int8/int16/int32/int64/uint/uint8/uint16/uint32/uint64 → decimal; bool → `"1"`/`"0"`; `ok=false` solo si el tipo no soportado (mapa anidado u otro).
@@ -116,6 +121,7 @@ Layout estándar de un programa Go (binario en `cmd/`, lógica no reutilizable e
 ```
 cmd/llama-launcher/main.go      package main
 internal/config/config.go       package config
+internal/preset/preset.go       package preset
 internal/runner/runner.go       package runner
 internal/ui/ui.go               package ui
 internal/ui/term_windows.go     package ui (//go:build windows)
@@ -135,6 +141,7 @@ Import paths con el module actual: `llama-launcher/internal/config`, `llama-laun
 - `func Load(path string) (*Config, error)` — nil,nil si no existe; tolera BOM y sanea backslashes persistiendo la corrección.
 - `func Save(path string, cfg *Config) error` — MarshalIndent 2 espacios + `\n`.
 - `func ModelsDirAbs(modelsDir string) string` — absoluto tal cual; relativo → `filepath.Join(Dir(), modelsDir)`.
+- `func ResolveModelPath(path, modelsDirAbs string) string` — ruta de fichero del modelo (`model`, `mmproj`, `lora`…): vacía/absoluta/URL (`://`) tal cual; relativa → `filepath.Join(modelsDirAbs, path)`. Compartida por runner (flags) y preset (INI).
 - `func Update(path string, cfg *Config) error` — escaneo + JSON compañero + save (único escaneo).
 - `func String(p Profile, key string) (string, bool)` / `func Bool(p Profile, key string) bool` / `func Float(p Profile, key string) float64` — getters tolerantes (string numérico incluido).
 - `func Enabled(entries []Profile) []Profile` — filtra `disabled: true` conservando orden (antes `enabledProfiles` en main).
@@ -154,8 +161,21 @@ Import paths con el module actual: `llama-launcher/internal/config`, `llama-laun
 
 ### internal/runner — API exportada
 - `func BuildArgs(p config.Profile, cfg *config.Config) ([]string, error)` — binario + `-m` + `--alias` + flags ordenados (bool true sin valor, false omitido).
-- `func RunServer(args []string) (exitCode int, interrupted bool, err error)` — primer plano, Ctrl+C reenviado al hijo.
-- Internas: `shortFlags`, `flagPrefix`, `resolveServerBin` (usa `config.Dir()`), `formatJSONValue`.
+- `func RunServer(args []string) (exitCode int, interrupted bool, err error)` — primer plano, Ctrl+C reenviado al hijo (delega en `RunServerIn("", args)`).
+- `func RunServerIn(dir string, args []string) (exitCode int, interrupted bool, err error)` — como `RunServer` con `cmd.Dir = dir` ("" = actual); usado por el modo servidor con cwd = `config.Dir()`. Error si `args` está vacío.
+- `func ResolveServerBin(bin string) (string, error)` — antes `resolveServerBin`: absoluto tal cual, relativo → `config.Dir()`, `exec.LookPath`, fallback Windows `llama-server.exe`; lo usa también el modo servidor.
+- `var pathFlags = map[string]bool{...}` — claves cuyo valor es una RUTA de fichero del modelo: `mmproj`, `lora`, `control-vector`, `grammar-file`, `chat-template-file`, `model-draft`.
+- `func resolvePathValue(key, val, modelsDirAbs string) string` — si `key` (sin guiones iniciales) está en `pathFlags` → `config.ResolveModelPath(val, modelsDirAbs)`; si no, `val` intacto.
+- `BuildArgs` aplica `resolvePathValue` a los valores string y a cada elemento string de arrays: `mmproj` relativo se envía como ruta completa bajo `modelsDir` (igual que `[S]`), para que llama-server lo encuentre sea cual sea su CWD.
+- Internas: `shortFlags`, `flagPrefix`, `formatJSONValue`, `pathFlags`, `resolvePathValue`.
+- Test: `internal/runner/runner_test.go` — `TestResolvePathValue` (relativo/absoluto/URL/subcarpeta/clave con guiones/clave no-ruta) y `TestBuildArgsResuelveRutas` (mmproj y arrays con rutas).
+
+### internal/preset — API exportada (modo servidor, 2026-11-21)
+- `const FileName = "preset.ini"` — nombre del fichero de presets (dentro de `modelsDir`).
+- `func Path(modelsDirAbs string) string` — `filepath.Join(modelsDirAbs, FileName)`.
+- `func Build(cfg *config.Config) string` — INI: comentario de cabecera + una sección por perfil HABILITADO (`[alias]`; duplicados → `-2`, `-3`…), `model = <ruta absoluta del .gguf>` + el resto de claves traducidas a forma larga y ordenadas; `mmproj` también con ruta absoluta.
+- `func Save(path string, cfg *config.Config) error` — `os.WriteFile(path, []byte(Build(cfg)), 0o644)` (sustituye/trunca el fichero).
+- Internas: `sectionName` (alias saneado), `uniqueSectionName`, `options(p, modelsDirAbs)` (mapa clave INI → valor), `sortedProfileKeys`, `iniKey` (c→ctx-size, ngl→n-gpu-layers, fa→flash-attn, t→threads, tb→threads-batch, b→batch-size, ub→ubatch-size, n→n-predict, np→parallel, ctk→cache-type-k, ctv→cache-type-v, s→seed; resto sin guiones iniciales), `formatValue` (string/bool `true|false`/números; arrays y mapas → no soportado), `resolveModelPath` (wrapper de `config.ResolveModelPath` que aplica `ToSlash`: absoluta/URL tal cual; relativa → modelsDir; separadores `/`).
 
 ### internal/ui — API exportada
 - `const AppName = "llama-launcher"` · `const AppVersion = "1.1.1"`.
@@ -172,14 +192,18 @@ Import paths con el module actual: `llama-launcher/internal/config`, `llama-laun
 - `func menuLoop(path string, cfg *config.Config)` — limpia + cabecera + `printMenu(config.Enabled(cfg.Profiles))` + `fmt.Print("Introduce un código: ")` + `ui.ReadLine`; número → `runProfile(cfg, enabled[n-1])`; `u/U` → `config.Update`; `r/R` → `refreshConfig` (error → mensaje + `ui.Pause`); `0` → salir; vacío → repintar.
 - `func refreshConfig(path string, cfg *config.Config) error` — `config.Load` y `*cfg = *reloaded`; error si es inválido o no existe (`config.json no existe`), dejando intacta la config en memoria.
 - `func runProfile(cfg *config.Config, p config.Profile)` — ya NO recibe `path` (no lo usaba): stat del `.gguf`, `runner.BuildArgs`, comando `$ ...`, `runner.RunServer`, pausa si fallo real.
-- `func printMenu(entries []config.Profile)` — recibe la lista YA filtrada: `N) alias — <file en cian> (<host:puerto> en amarillo)`, host por defecto `127.0.0.1`; pies `[U] Buscar nuevos modelos y actualizar config` / `[R] Refrescar memoria con datos de config` / `[0] Salir`.
+- `func printMenu(entries []config.Profile)` — recibe la lista YA filtrada: `N) alias — <file en cian> (<host:puerto> en amarillo)`, host por defecto `127.0.0.1`; pies `[U] Buscar nuevos modelos y actualizar config` / `[R] Refrescar memoria con datos de config` / `[S] Modo servidor (Pi): genera preset.ini y arranca llama-server` / `[0] Salir`.
+- `func startServerMode(cfg *config.Config)` — `[S]`: exige perfiles habilitados; `preset.Save(preset.Path(config.ModelsDirAbs(cfg.ModelsDir)), cfg)`; `runner.ResolveServerBin(cfg.ServerBin)`; args `[bin, --models-preset, <preset>, --port, 8080, --host, 0.0.0.0]`; `runArgs(config.Dir(), args)`.
+- `func runArgs(dir string, args []string)` — imprime `$ comando`, ejecuta `runner.RunServerIn(dir, args)` y pausa solo si `exitCode != 0 && !interrupted` (compartido con `runProfile`, que usa dir "").
+- `const serverModeHost = "0.0.0.0"` · `const serverModePort = "8080"` — parámetros fijos del router (pedido usuario).
 
 ## 3. Banco de Ideas / Funciones Pendientes de Implementar
 
 - `func checkDuplicatePort(entries []Profile) []string` — advertir puertos duplicados en el menú (sin bloquear).
 - Log a `llama-launcher.log` (`os.Create` + timestamps) — opcional.
 - `cmd.Env` con `CHCP 65001` si se detecta conflicto cp1252 ↔ UTF-8 en la consola.
-- Ampliar `shortFlags` si llama.cpp expone más flags cortos.
+- Ampliar `shortFlags` si llama.cpp expone más flags cortos (regenerar la lista desde `tools/server/README.md`).
+- `preset.shortKeys`: ampliarlo con los alias cortos nuevos (`ts`, `sm`, `mg`, `ctk`, `np`, `cb`, `mm`, `md`…) para normalizarlos a forma larga en `[S]`; el ejemplo oficial de `docs/preset.md` usa claves cortas (`hf = ...`), verificar qué acepta el parser antes de cambiar.
 - `-tags` de build para rutas por plataforma (fuera de alcance actual).
 - Validar en pruebas manuales: `alias` repetido y `--alias` duplicado → comportamiento de llama.cpp.
 - `extra_args` con elementos numéricos: reusar `formatJSONValue` (cubierto por diseño; verificar).
@@ -215,3 +239,9 @@ Import paths con el module actual: `llama-launcher/internal/config`, `llama-laun
 - Colores: `ui.Color(s, code)` emite `\x1b[<code>m…\x1b[0m` SOLO si `colorEnabled()` (Windows: stdout consola + VT activado una vez con `sync.Once`; Unix: stdout consola). En pipes/tests/consolas sin VT, texto plano sin escapes (la limpieza de pantalla usa el mismo predicado y cae a `cmd /c cls`). Fichero del modelo en cian (`36`), `(host:puerto)` en amarillo (`33`); `host` ausente → `127.0.0.1` (default de llama.cpp).
 - `AppVersion` 1.1.1 (features `[R]`, `defaults`, ocultar ausentes, colores; bump manual del usuario).
 - Prompt del menú: `fmt.Print("Introduce un código: ")` se imprime sin salto de línea justo después del pie y antes de `ui.ReadLine` (la opción se teclea en esa misma línea). Si `stdout` es consola y no hay repintado inmediato, el texto queda visible; tras cualquier acción el `ClearScreen` lo borra junto con el menú.
+- Modo servidor `[S]` (2026-11-21): router de llama-server para la Pi. Genera `<modelsDir>/preset.ini` (SUSTITUYE el anterior) desde los perfiles habilitados y lanza `[serverBin, --models-preset, <preset>, --port, 8080, --host, 0.0.0.0]` con `cmd.Dir = config.Dir()`. Formato INI verificado en llama.cpp (`common/preset.cpp` + `docs/preset.md`): secciones `[nombre]`, claves = argumentos SIN guiones, UN valor por clave (parser a mapa: claves repetidas se sobrescriben), claves desconocidas abortan la carga.
+- En el preset NO se escriben `host`/`port`/`api-key`/`alias` (el router los elimina/sobrescribe; van en la línea de comandos) ni `disabled` (no es un argumento de llama.cpp → error). `file` → `model` con ruta ABSOLUTA (recomendado por llama.cpp; las relativas se resuelven contra el CWD del servidor).
+- Claves cortas normalizadas a forma larga (`ngl`→`n-gpu-layers`, `fa`→`flash-attn`, `c`→`ctx-size`…). Si dos claves del mismo perfil apuntan a la misma clave INI (p.ej. `n-gpu-layers` + `ngl`), gana la última en orden alfabético de clave de config (mismo criterio que `BuildArgs`). Bools `false` se omiten y `true` → `true`.
+- Arrays/mapas no representables en el INI (un valor por clave) → se omiten con warning; perfiles sin `alias`/`file` → omitidos con warning. `[S]` NO escanea: usa los perfiles de `config.json` en memoria (`[U]` primero si faltan modelos).
+- `mmproj` es una RUTA en el preset: si el valor es relativo se prefija con `modelsDir` (absoluta), si ya es absoluto o una URL (`://`) se deja tal cual, siempre con separadores `/`. Sin esto llama-server resolvería el nombre contra SU CWD y no encontraría el fichero. `model` usa la misma resolución (`resolveModelPath`).
+- `[n]` (lanzamiento directo) usa la MISMA resolución para claves de ruta (`mmproj`, `lora`, `control-vector`, `grammar-file`, `chat-template-file`, `model-draft`) vía `config.ResolveModelPath` + `runner.resolvePathValue`: un `mmproj` relativo en el perfil se envía como `<modelsDir>/mmproj-*.gguf`. URLs (`://`) y rutas absolutas se dejan intactas; el resto de claves string no se tocan. Sin esto llama-server (cwd = el del launcher) no encontraba el proyector al lanzar desde el menú.

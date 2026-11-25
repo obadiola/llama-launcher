@@ -14,7 +14,7 @@ const (
 	// AppName — nombre mostrado en la cabecera.
 	AppName = "llama-launcher"
 	// AppVersion — versión mostrada en la cabecera (SemVer).
-	AppVersion = "1.1.1"
+	AppVersion = "1.2.0"
 )
 
 // Códigos ANSI usados por Color (menú).

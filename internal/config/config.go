@@ -337,6 +337,16 @@ func ModelsDirAbs(modelsDir string) string {
 	return filepath.Join(Dir(), modelsDir)
 }
 
+// ResolveModelPath — ruta de un fichero del modelo (model, mmproj, lora…): vacía, absoluta o URL
+// (contiene "://") se devuelve tal cual; relativa → filepath.Join(modelsDirAbs, path). Evita que
+// llama-server resuelva el nombre contra SU directorio de trabajo y no encuentre el fichero.
+func ResolveModelPath(path, modelsDirAbs string) string {
+	if path == "" || filepath.IsAbs(path) || strings.Contains(path, "://") {
+		return path
+	}
+	return filepath.Join(modelsDirAbs, path)
+}
+
 // Update — escanea ModelsDirAbs(cfg.ModelsDir); marca disabled:true los perfiles cuyo modelo ya no existe;
 // añade solo .gguf no referenciados (un perfil por alias si hay JSON compañero en array; uno por modelo si es
 // objeto; si no hay compañero → defaults de cfg.Defaults); guarda.
